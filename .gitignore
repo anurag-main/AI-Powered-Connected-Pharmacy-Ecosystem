@@ -1,0 +1,44 @@
+# ---------- Python / FastAPI ----------
+venv/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+dist/
+build/
+
+# ---------- Environment secrets ----------
+.env
+.env.local
+.env.*.local
+
+# ---------- Node / Next.js (Phase 11) ----------
+node_modules/
+.next/
+out/
+
+# ---------- IDE / editors ----------
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ---------- OS junk ----------
+.DS_Store
+Thumbs.db
+
+# ---------- Logs / databases ----------
+*.log
+*.sqlite
+*.db
+
+# ---------- Personal AI-coaching framework (kept local, not shared) ----------
+.claude/
+CLAUDE.md
+agents/
+hooks/
+skills/
+
