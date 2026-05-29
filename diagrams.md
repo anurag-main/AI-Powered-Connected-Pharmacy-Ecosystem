@@ -287,4 +287,156 @@ graph TD
     class Danger danger
 ```
 
+### Step 1.5 — Repository contract (service ↔ in-memory repo)
+
+The 4 repo methods, and how the service's "normalize then ask" flow lands on `find_by_normalized_name`. The repo never decides; it only fetches/stores.
+
+```mermaid
+graph TB
+    subgraph Service[Service layer - Pharmacist]
+        Normalize[normalize input name]
+        DecideDup[decide: is duplicate?]
+        Normalize --> DecideDup
+    end
+
+    subgraph Repository[InMemoryMedicineRepository]
+        Add[add — assigns id and created_at]
+        Get[get_by_id]
+        List[list_all]
+        Find[find_by_normalized_name]
+        Store[(_store: dict id → MedicineOut<br/>_next_id: int counter)]
+        Add <--> Store
+        Get <--> Store
+        List <--> Store
+        Find <--> Store
+    end
+
+    DecideDup -->|find_by_normalized_name<br/>'crocin 500mg'| Find
+    Find -.->|MedicineOut or None| DecideDup
+
+    classDef svc fill:#c8e6c9,stroke:#1b5e20,stroke-width:2px,color:#000
+    classDef repo fill:#fff9c4,stroke:#f57f17,stroke-width:2px,color:#000
+    classDef store fill:#e0e0e0,stroke:#424242,stroke-width:2px,color:#000
+    classDef method fill:#bbdefb,stroke:#0d47a1,stroke-width:2px,color:#000
+
+    class Normalize,DecideDup svc
+    class Repository repo
+    class Add,Get,List,Find method
+    class Store store
+```
+
+### POST /medicines — full request lifecycle
+
+Shows what every layer DOES to the data on the way IN (Frontend → MedicineCreate → Service → Repository) and the way OUT (Repository attaches id+created_at → MedicineOut → Response → Frontend).
+
+```mermaid
+graph TB
+    FE[Frontend / Client]
+    FE -->|POST /medicines<br/>JSON: name mrp hsn_code manufacturer| Router
+
+    subgraph Backend[FastAPI backend]
+        Router[Router — receive HTTP]
+        MC[MedicineCreate<br/>Pydantic validates JSON shape]
+        Svc[Service<br/>normalize name + check duplicate]
+        Repo[Repository<br/>assigns id + created_at,<br/>stores in _store]
+        MO[MedicineOut<br/>full record with server fields]
+
+        Router --> MC
+        MC --> Svc
+        Svc -->|primitive args:<br/>name mrp hsn_code manufacturer| Repo
+        Repo --> MO
+        MO --> Svc
+        Svc --> Router
+    end
+
+    Router -->|HTTP 201<br/>JSON: id name mrp hsn_code<br/>manufacturer created_at| FE
+
+    classDef ext fill:#bbdefb,stroke:#0d47a1,stroke-width:2px,color:#000
+    classDef router fill:#bbdefb,stroke:#0d47a1,stroke-width:2px,color:#000
+    classDef pyd fill:#c8e6c9,stroke:#1b5e20,stroke-width:2px,color:#000
+    classDef svc fill:#fff9c4,stroke:#f57f17,stroke-width:2px,color:#000
+    classDef repo fill:#ffe082,stroke:#e65100,stroke-width:2px,color:#000
+
+    class FE ext
+    class Router router
+    class MC,MO pyd
+    class Svc svc
+    class Repo repo
+```
+
+### Step 1.6 — MedicineService.create_medicine decision flow
+
+The 3 steps the service runs on every POST, and where each one routes if it short-circuits (duplicate → 409, clean → 201).
+
+```mermaid
+graph LR
+    R[Router] -->|MedicineCreate| S1
+
+    subgraph Service[MedicineService.create_medicine]
+        S1[1 normalize name] --> S2[2 ask repo find_by_normalized_name]
+        S2 -->|found| S3[raise DuplicateMedicineError]
+        S2 -->|None| S4[3 call repo.add new record]
+    end
+
+    S3 -.->|caught by router| R409[HTTP 409 Conflict]
+    S4 -->|MedicineOut| R201[HTTP 201 Created]
+
+    classDef router fill:#bbdefb,stroke:#0d47a1,stroke-width:2px,color:#000
+    classDef step fill:#c8e6c9,stroke:#1b5e20,stroke-width:2px,color:#000
+    classDef err fill:#f8d7da,stroke:#b71c1c,stroke-width:2px,color:#000
+    classDef ok fill:#a3e4a3,stroke:#1b5e20,stroke-width:2px,color:#000
+
+    class R router
+    class S1,S2,S4 step
+    class S3 err
+    class R409 err
+    class R201 ok
+```
+
+### Step 1.7 — Router with Depends() — full request lifecycle
+
+Shows how FastAPI resolves Depends() per request, builds the service, calls the endpoint, and translates domain exceptions into HTTP status codes.
+
+```mermaid
+graph TB
+    Client[Client] -->|POST /api/v1/medicines| FA[FastAPI app]
+
+    subgraph App[main.py]
+        FA -->|matches prefix| Router
+    end
+
+    subgraph RouterFile[app/routers/medicines.py]
+        Router[APIRouter prefix=/api/v1/medicines]
+        Router -->|on request| Resolve{Depends resolve}
+        Resolve -->|calls get_repository| GR[get_repository returns shared InMemoryRepo]
+        Resolve -->|calls get_service| GS[get_service builds MedicineService]
+        GS --> EP[endpoint: create_medicine]
+        GR --> GS
+    end
+
+    EP -->|MedicineCreate + service| Svc[MedicineService.create_medicine]
+    Svc -->|MedicineOut OR DuplicateMedicineError| EP
+
+    EP -->|success| OK[HTTP 201 JSON]
+    EP -.->|catch DuplicateMedicineError| Err[raise HTTPException 409]
+    Err --> ErrResp[HTTP 409 JSON: detail message]
+
+    OK --> Client
+    ErrResp --> Client
+
+    classDef ext fill:#bbdefb,stroke:#0d47a1,stroke-width:2px,color:#000
+    classDef router fill:#c8e6c9,stroke:#1b5e20,stroke-width:2px,color:#000
+    classDef dep fill:#fff9c4,stroke:#f57f17,stroke-width:2px,color:#000
+    classDef svc fill:#ffe082,stroke:#e65100,stroke-width:2px,color:#000
+    classDef ok fill:#a3e4a3,stroke:#1b5e20,stroke-width:2px,color:#000
+    classDef err fill:#f8d7da,stroke:#b71c1c,stroke-width:2px,color:#000
+
+    class Client,FA ext
+    class Router,EP router
+    class Resolve,GR,GS dep
+    class Svc svc
+    class OK ok
+    class Err,ErrResp err
+```
+
 ---

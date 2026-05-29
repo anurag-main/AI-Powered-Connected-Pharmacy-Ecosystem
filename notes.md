@@ -250,6 +250,132 @@ Each has different validation, audience (client vs server vs DB), and rate of ch
 
 ---
 
+## Step 1.5 — Repository layer (in-memory, designed to swap)
+
+### Concept: the storeroom clerk's exact job
+**Analogy:** The clerk has the only key to the storeroom. They do exactly 4 things:
+- Bring item #5 (`get_by_id`)
+- Bring everything (`list_all`)
+- Check if anything has label X (`find_by_normalized_name`)
+- Put new item on a free slot, give it a slot number (`add`)
+
+**They NEVER:** decide if you should add it, compute prices, reject by expiry, check auth. Those are the pharmacist's (service's) or security guard's (middleware's) jobs.
+
+### The 4-method repository contract
+| Method | Returns | Job |
+|--------|---------|-----|
+| `add(name, mrp, hsn_code, manufacturer)` | `MedicineOut` with new `id`+`created_at` | Store, generate id, mirror what a DB auto-increment does |
+| `get_by_id(medicine_id)` | `MedicineOut \| None` | Fetch by PK |
+| `list_all()` | `list[MedicineOut]` | All records, insertion order |
+| `find_by_normalized_name(normalized: str)` | `MedicineOut \| None` | Caller pre-normalizes; repo just compares |
+
+**Why pre-normalized:** the service owns the normalization rule. If "Crocin 500MG " and "crocin 500mg" should match, the service decides that — not the repo. Repo stays storage-rule-free.
+
+### Why the same contract survives Phase 2's MySQL swap
+The 4 method names + signatures don't change when storage swaps from dict → MySQL → MySQL+Redis. The service file is untouched across all three. **This is the entire payoff of the repository pattern.**
+
+### 3 beginner mistakes in repository design
+1. **Business logic inside repo methods** (duplicate check, FEFO selection, price calc). Rule: repo has zero `if` statements tied to *domain* meaning.
+2. **Returning mutable references to internal state** (`return self._store` instead of `list(self._store.values())`). Caller mutates returned object → repo's internal storage mutates → ghost data.
+3. **Coupling repo to HTTP schemas** (`def add(self, payload: MedicineCreate)`). Now a CSV bulk-import has to fake a MedicineCreate. Repo should take primitives or domain objects, never HTTP DTOs.
+
+### Worked example — the "atomic check-then-add" temptation
+
+> A teammate proposes a single repo method `add_with_duplicate_check(...)` that scans the store, raises if duplicate, then inserts. "Atomic! Cleaner!"
+
+**Reason 1 — business logic in repo (covered above).**
+**Reason 2 — atomicity belongs at the data store, not in Python:**
+- In-memory Phase 1: single-process Python + GIL = no race possible for dict ops anyway.
+- Phase 2 MySQL: atomicity is enforced by a `UNIQUE` constraint on the `normalized_name` column at the DB engine level. The DB refuses the duplicate insert. Python code wrapping it is redundant.
+- Bundling kills flexibility: Phase 8 admin tool might legitimately need to skip the check (force-add). Bulk imports may have their own dedup upstream. Tests of storage alone become impossible.
+
+**Senior framing for interviews:** *"Atomicity belongs at the data store (DB UNIQUE constraint, Redis SETNX). Decisions belong in services. Coupling them violates separation of concerns."*
+
+### Interview gold
+**Q:** *"Where does validation live in a layered architecture?"*
+**A:** Three layers, three kinds of validation:
+- **Schema layer (Pydantic):** *shape* validation — is the JSON well-formed, types correct, lengths sane? Auto-handled by FastAPI → 422 on failure.
+- **Service layer:** *business rule* validation — duplicates, FEFO, expiry, stock availability, price math.
+- **Storage layer (DB constraints / Redis):** *invariant* validation — UNIQUE, NOT NULL, foreign keys, atomicity guarantees.
+
+Each layer rejects bad data with the right tool. Bundling them creates the classic monolithic-validation mess.
+
+### The full POST /medicines lifecycle (every layer's transformation)
+*(see diagram: "POST /medicines — full request lifecycle" in diagrams.md)*
+
+```
+Frontend
+   │ POST JSON: {"name":"Crocin 500mg","mrp":25.5,"hsn_code":"30049099","manufacturer":"GSK"}
+   ▼
+Router (FastAPI)
+   │ FastAPI auto-parses the JSON body
+   ▼
+MedicineCreate  ← Pydantic validates SHAPE (types, min_length, gt=0, etc.)
+   │ → fails here = automatic HTTP 422, your code never runs
+   ▼
+Service
+   │ - normalize name: "Crocin 500mg" → "crocin 500mg"
+   │ - check duplicate (asks repo.find_by_normalized_name)
+   │ - calls repo.add(name=..., mrp=..., hsn_code=..., manufacturer=...)
+   ▼
+Repository
+   │ - takes new_id from self._next_id
+   │ - stamps created_at = datetime.now()
+   │ - builds MedicineOut(id=..., name=..., mrp=..., created_at=...)
+   │ - stores it in self._store, increments self._next_id
+   ▼
+MedicineOut  ← server-generated id and created_at now attached
+   │ returned back up: Repo → Service → Router
+   ▼
+Router
+   │ FastAPI serializes MedicineOut to JSON (only the declared output fields)
+   ▼
+Frontend  ← HTTP 201 + JSON body with id, name, mrp, hsn_code, manufacturer, created_at
+```
+
+**What's NEVER in the response (and why):** `cost_price`, `supplier_notes`, `profit_margin` — they live only in the repository's internal state (Phase 2: the DB row). They never appear in `MedicineOut`, so FastAPI **physically cannot** serialize them. That's the input/output contract paying off.
+
+### Pitfalls hit during Step 1.7 — router-loading traps
+
+**Trap A — Decorator arguments evaluate at IMPORT time, not request time.**
+Wrote `response_model=MedicinineeOut` (typo for `MedicineOut`). When Python imported the module, the `@router.get(...)` decorator was called immediately, hit the undefined name → `NameError` → **the entire app refused to start**. The bug wasn't lurking for the first GET request — it killed uvicorn boot.
+**Senior takeaway:** any typo in a decorator's keyword args, an `app.include_router(...)` call, or a module-level constant blocks app startup. Test that the app boots after every edit, not just that endpoints work.
+
+**Trap B — Compound statements can't share a line with `def`.**
+Wrote `def get_medicine(...): result = ... if result is None: raise ...` all on one line. Python rejects this with `SyntaxError`. You CAN write `def f(): return 1` (single simple statement), but you can NEVER write `def f(): if x: y` (compound `if` on header line).
+**Rule of thumb:** if the body has a colon (`if:`, `for:`, `with:`, `try:`), it must start on the next indented line.
+
+### Pitfall hit during Step 1.6 — shadowing the `id` builtin
+
+**Bug:** wrote `return self._repo.get_by_id(id)` inside `get_medicine(self, medicine_id: int)`. The parameter was `medicine_id`, but the call used `id`.
+
+**Why it silently fails:** `id` is a **built-in Python function** (returns memory address of an object). Python's name lookup finds the builtin → passes the *function reference* as the argument → `self._store.get(<function id>)` returns `None` → endpoint always 404s. **No error, just always-wrong behavior.**
+
+**Senior lesson — never use these names as variables:** `id`, `list`, `dict`, `str`, `type`, `input`, `next`, `filter`, `min`, `max`, `sum`, `all`, `any`, `bytes`, `set`, `tuple`. They all silently shadow built-ins.
+
+**Detection:** modern linters (`ruff`'s rule `A001` — flake8-builtins) flag this automatically. Wire up `ruff` later in the project; until then, mental checklist before naming any variable.
+
+### Pitfall hit during Step 1.5 — Python indentation defines scope
+
+Three indentation levels matter inside a class:
+
+| Indent | What it means |
+|--------|----------------|
+| 0 spaces | Module level (top of file) — `class`, top-level `def`, imports |
+| 4 spaces | Class body — `def __init__`, `def add`, attribute definitions |
+| 8 spaces | Method body — code that runs when the method is called |
+
+**The lesson:** if you accidentally write `def get_by_id(...)` at column 0 instead of column 4, Python doesn't error — it just creates a **top-level function** instead of a method. The class instance won't have that method. The bug surfaces only when you call `repo.get_by_id(...)` and get `AttributeError`. **Always check indentation when adding new methods to an existing class.**
+
+### Where does `self._next_id` come from? (Plain-language)
+- `self` is the **specific repo instance's private locker.**
+- `__init__` writes `self._next_id = 1` once when the instance is created → "label `_next_id` in the locker, value `1`."
+- Every later method that has `self` as its first param can read or write that label.
+- The `_` prefix is convention: *"private, don't touch from outside the class."*
+- In Phase 2 this whole counter disappears — MySQL's `AUTO_INCREMENT` column hands out the id.
+
+---
+
 ## Git / GitHub fundamentals (covered alongside Phase 0)
 
 ### Concept: local repo ↔ remote

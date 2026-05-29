@@ -1,9 +1,11 @@
 """FastAPI application entrypoint for the AI Pharmacy Ecosystem.
 
-Boots the FastAPI app and (in later steps) wires together all routers.
+Boots the FastAPI app and wires together every domain router.
 Run locally with:  uvicorn app.main:app --reload
 """
 from fastapi import FastAPI
+
+from app.routers import medicines as medicines_router
 
 app = FastAPI(
     title="AI Pharmacy Ecosystem",
@@ -17,4 +19,6 @@ def health_check():
     return {"status": "ok"}
 
 
-# YOUR JOB (step 1.7): app.include_router(...) for medicines, customers, sales, etc.
+# Register every domain router here. As we add customers, sales, batches, etc.,
+# each gets its own file under app/routers/ and is included on one line below.
+app.include_router(medicines_router.router)
