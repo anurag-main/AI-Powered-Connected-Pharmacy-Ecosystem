@@ -8,26 +8,32 @@ The router translates between HTTP and the service layer:
 The router NEVER:
 - Decides business rules (call the service for that).
 - Talks to storage (call the service → repository).
+
+Phase 2 wiring: the repository is now backed by SQLAlchemy + MySQL via Depends(get_db).
+The service file is unchanged (it depends on the MedicineRepository Protocol, not a concrete class).
 """
 from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy.orm import Session
 
+from app.core.database import get_db
 from app.exceptions import DuplicateMedicineError
-from app.repositories.medicine_repository import InMemoryMedicineRepository
+from app.repositories.protocols import MedicineRepository
+from app.repositories.sqlalchemy_medicine_repository import SQLAlchemyMedicineRepository
 from app.schemas.medicine import MedicineCreate, MedicineOut
 from app.services.medicine_service import MedicineService
 
-# Phase 1 ONLY: module-level singleton repo so every request shares the same dict.
-# Phase 2 replaces this with a per-request DB session — same Depends() pattern, different provider.
-_repository = InMemoryMedicineRepository()
 
+def get_repository(db: Session = Depends(get_db)) -> MedicineRepository:
+    """Per-request repository, backed by SQLAlchemy + MySQL.
 
-def get_repository() -> InMemoryMedicineRepository:
-    """Dependency provider returning the shared in-memory repo (Phase 1)."""
-    return _repository
+    The Session is injected by Depends(get_db) — fresh per request, closed on response.
+    Return type is the MedicineRepository Protocol so the service stays storage-agnostic.
+    """
+    return SQLAlchemyMedicineRepository(db=db)
 
 
 def get_service(
-    repo: InMemoryMedicineRepository = Depends(get_repository),
+    repo: MedicineRepository = Depends(get_repository),
 ) -> MedicineService:
     """Dependency provider building a MedicineService with the right repo."""
     return MedicineService(repository=repo)

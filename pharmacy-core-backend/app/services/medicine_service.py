@@ -11,7 +11,7 @@ The Service NEVER:
 - Knows about SQL or storage details (those belong in the repository).
 """
 from app.exceptions import DuplicateMedicineError
-from app.repositories.medicine_repository import InMemoryMedicineRepository
+from app.repositories.protocols import MedicineRepository
 from app.schemas.medicine import MedicineCreate, MedicineOut
 
 
@@ -28,10 +28,11 @@ def normalize_medicine_name(name: str) -> str:
 class MedicineService:
     """Business rules for Medicine — duplicate detection today, pricing/FEFO later."""
 
-    def __init__(self, repository: InMemoryMedicineRepository) -> None:
+    def __init__(self, repository: MedicineRepository) -> None:
         # Constructor takes the repo as a DEPENDENCY (dependency injection).
-        # Phase 1.7 uses FastAPI's Depends() to inject the right repo here.
-        # In tests, you'll inject a fake repo with the same interface — without touching this file.
+        # Type hint is the MedicineRepository Protocol — Phase 1 (in-memory)
+        # and Phase 2 (SQLAlchemy) implementations both satisfy it structurally.
+        # In tests, you'll inject a fake repo with the same 4 methods.
         self._repo = repository
 
     def create_medicine(self, payload: MedicineCreate) -> MedicineOut:

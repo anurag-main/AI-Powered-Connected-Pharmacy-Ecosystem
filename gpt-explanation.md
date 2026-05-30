@@ -1952,3 +1952,2051 @@ and makes them available as APIs.
 ```
 
 That single line is literally connecting `main.py` to `medicines.py`.
+
+# Phase 2 - Persistent Storage (Explained Like a Kid)
+
+## What Is Changing?
+
+### Phase 1
+
+Current Architecture:
+
+```text
+Router
+↓
+Service
+↓
+Repository
+↓
+Python Dictionary (_store)
+```
+
+Repository stores data in:
+
+```python
+_store = {}
+```
+
+Example:
+
+```python
+{
+    1: "Dolo",
+    2: "Crocin"
+}
+```
+
+Problem:
+
+When server restarts:
+
+```bash
+uvicorn app.main:app --reload
+```
+
+everything disappears.
+
+```python
+{}
+```
+
+All medicines are lost.
+
+---
+
+## Phase 2
+
+Replace:
+
+```python
+_store = {}
+```
+
+with:
+
+```text
+MySQL Database
+```
+
+New Architecture:
+
+```text
+Router
+↓
+Service
+↓
+Repository
+↓
+SQLAlchemy
+↓
+MySQL
+```
+
+Now data survives server restarts.
+
+---
+
+# Why Repository Pattern Was Worth It
+
+Current:
+
+```text
+Router
+↓
+Service
+↓
+Repository
+↓
+Dictionary
+```
+
+Future:
+
+```text
+Router
+↓
+Service
+↓
+Repository
+↓
+MySQL
+```
+
+Only Repository changes.
+
+Router stays the same.
+
+Service stays the same.
+
+This is the biggest advantage of clean architecture.
+
+---
+
+# MySQL
+
+Think of MySQL as a giant filing cabinet.
+
+Instead of storing data in memory:
+
+```python
+_store = {}
+```
+
+Store it permanently in tables.
+
+Example:
+
+| id  | name   |
+| --- | ------ |
+| 1   | Dolo   |
+| 2   | Crocin |
+
+Even after restarting the server:
+
+```bash
+CTRL + C
+uvicorn app.main:app --reload
+```
+
+data still exists.
+
+---
+
+# SQLAlchemy
+
+## What Is It?
+
+SQLAlchemy is an ORM.
+
+ORM means:
+
+```text
+Object Relational Mapper
+```
+
+---
+
+## Why Do We Need It?
+
+You write Python.
+
+Database understands SQL.
+
+Example:
+
+You write:
+
+```python
+medicine = Medicine(
+    name="Dolo",
+    mrp=50
+)
+```
+
+Database understands:
+
+```sql
+INSERT INTO medicines
+(name, mrp)
+VALUES ('Dolo', 50);
+```
+
+SQLAlchemy acts as a translator.
+
+---
+
+## Visual
+
+```text
+Python Code
+      ↓
+SQLAlchemy
+      ↓
+SQL Queries
+      ↓
+MySQL
+```
+
+---
+
+## Without SQLAlchemy
+
+You write:
+
+```sql
+SELECT *
+FROM medicines
+WHERE id = 1;
+```
+
+---
+
+## With SQLAlchemy
+
+You write:
+
+```python
+session.get(Medicine, 1)
+```
+
+SQLAlchemy generates SQL automatically.
+
+---
+
+# Alembic
+
+## What Problem Does It Solve?
+
+Suppose today your table is:
+
+| id | name |
+
+Tomorrow you want:
+
+| id | name | expiry_date |
+
+How do you track that change?
+
+---
+
+Bad Way:
+
+Open MySQL manually.
+
+Add columns manually.
+
+Nobody knows what changed.
+
+Production becomes messy.
+
+---
+
+Good Way:
+
+Use Alembic.
+
+Think:
+
+```text
+Git for Database Schema
+```
+
+Every database change is tracked.
+
+Example:
+
+```text
+Migration 1:
+Created medicines table
+
+Migration 2:
+Added expiry_date column
+
+Migration 3:
+Added stock column
+```
+
+Everything is version-controlled.
+
+---
+
+# Session
+
+Most beginners get confused here.
+
+Think:
+
+```text
+Temporary conversation with the database
+```
+
+Request arrives.
+
+```text
+Need medicine data
+```
+
+Open session.
+
+Read data.
+
+Save data.
+
+Close session.
+
+---
+
+Visual
+
+```text
+Request Starts
+      ↓
+Open Session
+      ↓
+Read / Write Database
+      ↓
+Close Session
+      ↓
+Request Ends
+```
+
+Each request gets its own session.
+
+---
+
+# Transactions
+
+Most Important Database Concept
+
+---
+
+## Bank Transfer Example
+
+Your account:
+
+```text
+1000
+```
+
+Friend account:
+
+```text
+500
+```
+
+Transfer:
+
+```text
+100
+```
+
+Steps:
+
+```text
+1. Deduct from your account
+2. Add to friend's account
+```
+
+---
+
+Problem:
+
+```text
+Step 1 succeeds
+
+Server crashes
+
+Step 2 fails
+```
+
+Now:
+
+```text
+You = 900
+Friend = 500
+```
+
+₹100 disappeared.
+
+Disaster.
+
+---
+
+## Transaction Solution
+
+```text
+Either BOTH succeed
+
+OR
+
+BOTH fail
+```
+
+No middle state.
+
+---
+
+## Pharmacy Example
+
+Medicine Sale:
+
+```text
+Decrease Stock
+Create Invoice
+Create Sale Record
+```
+
+If any step fails:
+
+```text
+Rollback Everything
+```
+
+Database returns to original state.
+
+---
+
+# Three Production Mistakes
+
+## Mistake 1
+
+Manually changing database schema.
+
+Bad:
+
+```text
+Open MySQL Workbench
+
+Add column manually
+```
+
+Problem:
+
+Alembic doesn't know about the change.
+
+Future migrations break.
+
+---
+
+Correct:
+
+```bash
+alembic revision --autogenerate
+alembic upgrade head
+```
+
+All schema changes go through migrations.
+
+---
+
+## Mistake 2
+
+No UNIQUE or Index.
+
+Example:
+
+```text
+normalized_name
+```
+
+used for duplicate checks.
+
+Without index:
+
+```text
+Scan 100,000 rows
+```
+
+Slow.
+
+With index:
+
+```text
+Jump directly to row
+```
+
+Fast.
+
+---
+
+## Mistake 3
+
+No Transaction.
+
+Example:
+
+```text
+Decrease Stock
+Create Invoice
+Create Sale Record
+```
+
+If middle step fails:
+
+```text
+Broken data
+```
+
+Use transaction so everything succeeds or everything rolls back.
+
+---
+
+# Tools You Must Remember
+
+## MySQL
+
+```text
+Stores data permanently
+```
+
+---
+
+## SQLAlchemy
+
+```text
+Python ↔ SQL Translator
+```
+
+Also known as ORM.
+
+---
+
+## Alembic
+
+```text
+Version control for database schema
+```
+
+---
+
+## Session
+
+```text
+Temporary database conversation
+for one request
+```
+
+---
+
+## Transaction
+
+```text
+All operations succeed
+
+OR
+
+All operations fail
+```
+
+No partial updates.
+
+---
+
+# Ultimate Phase 2 Mental Model
+
+Phase 1:
+
+```text
+Router
+↓
+Service
+↓
+Repository
+↓
+Dictionary
+```
+
+Phase 2:
+
+```text
+Router
+↓
+Service
+↓
+Repository
+↓
+SQLAlchemy ORM
+↓
+MySQL Database
+```
+
+Everything above Repository remains exactly the same.
+
+Only the storage layer becomes real, persistent, scalable, and production-ready.
+
+# ERD Design Explained Like a Kid Before Writing Any SQLAlchemy
+
+## First Understand What ERD Means
+
+ERD = Entity Relationship Diagram
+
+Big words.
+
+Think:
+
+```text
+ERD = Blueprint of Database
+```
+
+Before building a house, an architect draws:
+
+```text
+Bedroom
+Kitchen
+Bathroom
+Doors
+Windows
+```
+
+Before building a database, a backend engineer draws:
+
+```text
+Tables
+Columns
+Relationships
+```
+
+That drawing is called ERD.
+
+---
+
+# Why Design ERD Before Writing Code?
+
+Imagine you directly start coding:
+
+```python
+class Medicine(Base):
+```
+
+After 3 months you realize:
+
+```text
+Oops...
+One medicine can have multiple batches.
+```
+
+Now:
+
+```text
+Database
+API
+Services
+Queries
+```
+
+everything must be rewritten.
+
+Expensive mistake.
+
+---
+
+# Think Like A Real Pharmacy
+
+A pharmacy is NOT just medicines.
+
+It has:
+
+```text
+Medicines
+Batches
+Customers
+Sales
+Sale Items
+Users
+```
+
+Each becomes a database table.
+
+---
+
+# Entity 1: Medicines
+
+Question:
+
+```text
+What products do we sell?
+```
+
+Answer:
+
+```text
+Crocin
+Dolo
+Pantop
+```
+
+Store in:
+
+```text
+MEDICINES
+```
+
+Example:
+
+| id  | name   | mrp |
+| --- | ------ | --- |
+| 1   | Crocin | 25  |
+| 2   | Dolo   | 30  |
+
+Think:
+
+```text
+Medicine table = Product Catalog
+```
+
+Like Amazon catalog.
+
+---
+
+# Entity 2: Batches
+
+This is where beginners get confused.
+
+Medicine:
+
+```text
+Crocin
+```
+
+is a concept.
+
+But physical stock arrives in batches.
+
+Example:
+
+January Purchase:
+
+```text
+Batch A
+100 boxes
+Expiry Dec 2026
+```
+
+March Purchase:
+
+```text
+Batch B
+50 boxes
+Expiry May 2027
+```
+
+Same medicine.
+
+Different stock.
+
+Different expiry.
+
+Different supplier.
+
+Different cost.
+
+Therefore:
+
+```text
+One Medicine
+       ↓
+Many Batches
+```
+
+Visual:
+
+```text
+Crocin
+   ↓
+Batch A
+Batch B
+Batch C
+```
+
+---
+
+# Why FEFO Needs Batches
+
+FEFO:
+
+```text
+First Expire First Out
+```
+
+Suppose:
+
+```text
+Batch A expires in Dec 2026
+
+Batch B expires in May 2027
+```
+
+Customer buys Crocin.
+
+Which batch should be sold?
+
+```text
+Batch A
+```
+
+because it expires first.
+
+Without Batch table:
+
+```text
+Impossible
+```
+
+---
+
+# Entity 3: Customers
+
+Question:
+
+```text
+Who bought the medicine?
+```
+
+Store:
+
+```text
+Name
+Phone
+```
+
+Example:
+
+| id  | name  |
+| --- | ----- |
+| 1   | Rahul |
+| 2   | Priya |
+
+---
+
+# Entity 4: Sales
+
+Question:
+
+```text
+One bill / invoice
+```
+
+Example:
+
+```text
+Bill #101
+
+Customer:
+Rahul
+
+Total:
+₹300
+```
+
+Store in:
+
+```text
+SALES
+```
+
+---
+
+# Entity 5: Sale Items
+
+Most important concept.
+
+One Sale:
+
+```text
+Invoice #101
+```
+
+contains:
+
+```text
+Crocin × 2
+Dolo × 3
+Pantop × 1
+```
+
+Can we store all this in SALES table?
+
+No.
+
+Create:
+
+```text
+SALE_ITEMS
+```
+
+Example:
+
+| sale_id | medicine |
+| ------- | -------- |
+| 101     | Crocin   |
+| 101     | Dolo     |
+| 101     | Pantop   |
+
+Think:
+
+```text
+SALE = Invoice
+
+SALE_ITEMS = Lines inside invoice
+```
+
+---
+
+# Entity 6: Users
+
+Question:
+
+```text
+Which employee created the sale?
+```
+
+Store:
+
+```text
+Admin
+Pharmacist
+```
+
+Example:
+
+| id  | email                             |
+| --- | --------------------------------- |
+| 1   | [admin@x.com](mailto:admin@x.com) |
+
+---
+
+# Relationships
+
+This is the REAL reason for ERD.
+
+---
+
+## Relationship 1
+
+```text
+Medicine
+     ↓
+Many Batches
+```
+
+Example:
+
+```text
+Crocin
+   ↓
+Batch A
+Batch B
+Batch C
+```
+
+Database:
+
+```text
+MEDICINES 1 → MANY BATCHES
+```
+
+---
+
+## Relationship 2
+
+```text
+Customer
+     ↓
+Many Sales
+```
+
+Example:
+
+```text
+Rahul
+```
+
+can buy:
+
+```text
+Invoice 1
+Invoice 2
+Invoice 3
+```
+
+Database:
+
+```text
+CUSTOMERS 1 → MANY SALES
+```
+
+---
+
+## Relationship 3
+
+```text
+Sale
+     ↓
+Many Sale Items
+```
+
+Example:
+
+```text
+Invoice #101
+```
+
+contains:
+
+```text
+Crocin
+Dolo
+Pantop
+```
+
+Database:
+
+```text
+SALES 1 → MANY SALE_ITEMS
+```
+
+---
+
+## Relationship 4
+
+```text
+Batch
+     ↓
+Many Sale Items
+```
+
+Example:
+
+```text
+Batch B1142
+```
+
+sold many times.
+
+Database:
+
+```text
+BATCHES 1 → MANY SALE_ITEMS
+```
+
+---
+
+# Why Sale Items Links To Batch
+
+Not Medicine.
+
+Example:
+
+Government says:
+
+```text
+Recall Batch B1142
+```
+
+Need answer:
+
+```text
+Which customers received
+medicine from Batch B1142?
+```
+
+If sale_items only stores medicine:
+
+```text
+Impossible
+```
+
+If sale_items stores batch:
+
+```text
+Easy
+```
+
+---
+
+# Why Store Unit Price In Sale Item?
+
+January:
+
+```text
+Crocin = ₹25
+```
+
+June:
+
+```text
+Crocin = ₹30
+```
+
+Customer bought in January.
+
+Invoice should still show:
+
+```text
+₹25
+```
+
+Therefore:
+
+```text
+SALE_ITEMS.unit_price
+```
+
+stores historical snapshot.
+
+---
+
+# Why Cost Price Belongs To Batch
+
+Scenario 1:
+
+```text
+Supplier A → ₹18
+
+Supplier B → ₹22
+```
+
+Same medicine.
+
+Different costs.
+
+---
+
+Scenario 2:
+
+```text
+Jan Batch → ₹18
+
+Jul Batch → ₹25
+```
+
+Costs changed over time.
+
+Batch stores history correctly.
+
+Medicine table cannot.
+
+---
+
+# Final ERD Mental Model
+
+```text
+USERS
+  ↓
+SALES
+  ↓
+SALE_ITEMS
+  ↓
+BATCHES
+  ↓
+MEDICINES
+
+CUSTOMERS
+  ↓
+SALES
+```
+
+Think of it as:
+
+```text
+Customer buys
+        ↓
+Sale created
+        ↓
+Sale contains items
+        ↓
+Items came from batches
+        ↓
+Batches belong to medicines
+```
+
+This entire design is completed BEFORE writing a single SQLAlchemy model.
+
+That's why senior engineers spend hours on ERD design and minutes writing actual table code.
+
+# Complete Pharmacy Business Flow Example
+
+The easiest way to understand the entire ERD is to follow one real customer purchase.
+
+---
+
+## Customer Buys Medicine
+
+Customer:
+
+```text
+Rahul
+```
+
+comes to the pharmacy and wants:
+
+```text
+2 Crocin
+1 Dolo
+```
+
+---
+
+## Step 1 - Customer Record
+
+Customers Table:
+
+| id  | name  |
+| --- | ----- |
+| 1   | Rahul |
+
+Think:
+
+```text
+Who is buying?
+```
+
+Answer:
+
+```text
+Rahul
+```
+
+---
+
+## Step 2 - Sale Created
+
+A bill is generated.
+
+Sales Table:
+
+| id  | customer_id | total_amount |
+| --- | ----------- | ------------ |
+| 101 | 1           | 80           |
+
+Think:
+
+```text
+A Sale = One Invoice
+```
+
+Example:
+
+```text
+Invoice #101
+Customer: Rahul
+Total: ₹80
+```
+
+---
+
+## Step 3 - Sale Contains Items
+
+What is inside Invoice #101?
+
+```text
+Crocin × 2
+Dolo × 1
+```
+
+Sale Items Table:
+
+| id  | sale_id | batch_id | quantity |
+| --- | ------- | -------- | -------- |
+| 1   | 101     | 501      | 2        |
+| 2   | 101     | 601      | 1        |
+
+Think:
+
+```text
+Sale = Invoice
+
+Sale Items = Products inside invoice
+```
+
+---
+
+## Step 4 - Items Came From Batches
+
+Crocin stock may exist in multiple batches.
+
+Batches Table:
+
+| id  | medicine_id | batch_number | expiry_date |
+| --- | ----------- | ------------ | ----------- |
+| 501 | 1           | CRO-A1       | Dec 2026    |
+| 502 | 1           | CRO-B1       | May 2027    |
+| 601 | 2           | DOL-A1       | Jan 2027    |
+
+Because of FEFO:
+
+```text
+First Expire First Out
+```
+
+the system chooses:
+
+```text
+Batch CRO-A1
+```
+
+since it expires earlier.
+
+---
+
+## Step 5 - Batch Belongs To Medicine
+
+Medicines Table:
+
+| id  | name   |
+| --- | ------ |
+| 1   | Crocin |
+| 2   | Dolo   |
+
+Relationship:
+
+```text
+Batch CRO-A1
+        ↓
+      Crocin
+```
+
+A batch is physical stock.
+
+A medicine is the product definition.
+
+---
+
+# Complete Story
+
+```text
+Rahul
+  ↓
+Invoice #101
+  ↓
+Crocin × 2
+Dolo × 1
+  ↓
+Batch CRO-A1
+Batch DOL-A1
+  ↓
+Crocin
+Dolo
+```
+
+---
+
+# Full Business Flow
+
+```text
+Customer Rahul
+      ↓
+creates
+      ↓
+Sale #101
+      ↓
+contains
+      ↓
+2 Crocin
+1 Dolo
+      ↓
+sold from
+      ↓
+Batch CRO-A1
+Batch DOL-A1
+      ↓
+which belong to
+      ↓
+Crocin Medicine
+Dolo Medicine
+```
+
+---
+
+# Why This Design Matters
+
+Imagine a government recall notice arrives:
+
+```text
+Recall Batch CRO-A1
+```
+
+Question:
+
+```text
+Which customers received medicine
+from Batch CRO-A1?
+```
+
+Database Trace:
+
+```text
+Batch CRO-A1
+      ↓
+Sale Items
+      ↓
+Sale #101
+      ↓
+Rahul
+```
+
+Result:
+
+```text
+Rahul received medicine
+from recalled Batch CRO-A1
+```
+
+This is why pharmaceutical systems are designed around:
+
+```text
+Customer
+   ↓
+Sale
+   ↓
+Sale Item
+   ↓
+Batch
+   ↓
+Medicine
+```
+
+Every relationship exists because it answers a real business question.
+
+# From Frontend → MySQL (What Really Happens Internally)
+
+## Goal
+
+User clicks:
+
+```text
+Add Medicine
+```
+
+Frontend sends:
+
+```json
+{
+  "name": "Crocin",
+  "mrp": 25,
+  "hsn_code": "3004",
+  "manufacturer": "GSK"
+}
+```
+
+How does this become a row inside MySQL?
+
+---
+
+# Phase 1 Architecture
+
+Today
+
+```text
+Frontend
+   ↓
+Router
+   ↓
+Service
+   ↓
+Repository
+   ↓
+Dictionary
+```
+
+---
+
+# Phase 2 Architecture
+
+Tomorrow
+
+```text
+Frontend
+   ↓
+Router
+   ↓
+Service
+   ↓
+Repository
+   ↓
+SQLAlchemy
+   ↓
+MySQL
+```
+
+---
+
+# Step 1 - Frontend Sends Request
+
+Frontend:
+
+```javascript
+await fetch("/api/v1/medicines", {
+  method: "POST",
+  body: JSON.stringify({
+    name: "Crocin",
+    mrp: 25,
+    hsn_code: "3004",
+  }),
+});
+```
+
+Request reaches FastAPI.
+
+---
+
+# Step 2 - Router Receives Request
+
+File:
+
+```text
+routers/medicines.py
+```
+
+Endpoint:
+
+```python
+@router.post("")
+def create_medicine(
+    payload: MedicineCreate,
+    service: MedicineService
+):
+```
+
+FastAPI automatically converts:
+
+```json
+{
+  "name": "Crocin",
+  "mrp": 25
+}
+```
+
+into:
+
+```python
+MedicineCreate(
+    name="Crocin",
+    mrp=25
+)
+```
+
+---
+
+# Step 3 - Router Calls Service
+
+```python
+service.create_medicine(payload)
+```
+
+Visual:
+
+```text
+Router
+  ↓
+Service
+```
+
+Router does not know database.
+
+Router does not know SQL.
+
+---
+
+# Step 4 - Service Applies Business Rules
+
+File:
+
+```text
+services/medicine_service.py
+```
+
+```python
+service.create_medicine()
+```
+
+Service:
+
+```text
+Normalize name
+Check duplicate
+Validate business rules
+```
+
+Example:
+
+```python
+normalized = "crocin"
+```
+
+---
+
+Then:
+
+```python
+repo.add(...)
+```
+
+Visual:
+
+```text
+Router
+  ↓
+Service
+  ↓
+Repository
+```
+
+---
+
+# Step 5 - Repository Creates ORM Object
+
+File:
+
+```text
+repositories/medicine_repository.py
+```
+
+Instead of:
+
+```python
+_store[id] = medicine
+```
+
+we now create:
+
+```python
+medicine = Medicine(
+    name="Crocin",
+    mrp=25,
+    hsn_code="3004"
+)
+```
+
+Question:
+
+Is this in database?
+
+Answer:
+
+```text
+NO
+```
+
+Very important.
+
+Right now:
+
+```text
+Only Python Memory
+```
+
+---
+
+# What Is Medicine?
+
+File:
+
+```text
+models/medicine.py
+```
+
+```python
+class Medicine(Base):
+```
+
+This is called:
+
+```text
+ORM Model
+```
+
+---
+
+Think:
+
+```text
+Medicine Class
+        ↕
+medicines Table
+```
+
+---
+
+Visual
+
+```text
+Python Object
+
+Medicine(
+   name="Crocin"
+)
+
+        ↕
+
+MySQL Row
+
++----+---------+
+| id | Crocin  |
++----+---------+
+```
+
+---
+
+# How SQLAlchemy Knows This Mapping?
+
+Model:
+
+```python
+class Medicine(Base):
+
+    __tablename__ = "medicines"
+
+    id = Column(Integer)
+
+    name = Column(String)
+
+    mrp = Column(DECIMAL)
+```
+
+This means:
+
+```text
+Python Class
+      ↓
+Database Table
+```
+
+Mapping:
+
+```text
+Medicine.id
+       ↓
+medicines.id
+
+Medicine.name
+       ↓
+medicines.name
+
+Medicine.mrp
+       ↓
+medicines.mrp
+```
+
+---
+
+# What Is Session?
+
+Most Important Concept
+
+Think:
+
+```text
+Session = Conversation With Database
+```
+
+Example:
+
+You enter bank.
+
+Talk to employee.
+
+Finish work.
+
+Leave.
+
+---
+
+Database equivalent:
+
+```text
+Open Session
+     ↓
+Read Data
+     ↓
+Write Data
+     ↓
+Close Session
+```
+
+---
+
+Visual
+
+```text
+Request Starts
+      ↓
+Session Opens
+      ↓
+Database Work
+      ↓
+Session Closes
+      ↓
+Request Ends
+```
+
+---
+
+# Why Not Talk To MySQL Directly?
+
+Because opening connections is expensive.
+
+Session manages:
+
+```text
+Connection
+
+Transactions
+
+Caching
+
+Tracking Changes
+```
+
+for us.
+
+---
+
+# Session.add()
+
+Repository:
+
+```python
+session.add(medicine)
+```
+
+Question:
+
+Did SQL execute?
+
+Answer:
+
+```text
+NO
+```
+
+Still not.
+
+---
+
+Current state:
+
+```text
+Python Object Created
+Session Tracking It
+```
+
+Think:
+
+```text
+Medicine object placed
+inside a "pending changes" basket
+```
+
+---
+
+# Session.commit()
+
+Now:
+
+```python
+session.commit()
+```
+
+Everything changes.
+
+---
+
+SQLAlchemy looks at:
+
+```text
+Pending Changes Basket
+```
+
+and says:
+
+```text
+Need INSERT
+```
+
+---
+
+Generates SQL automatically:
+
+```sql
+INSERT INTO medicines
+(
+ name,
+ mrp,
+ hsn_code
+)
+VALUES
+(
+ 'Crocin',
+ 25,
+ '3004'
+);
+```
+
+---
+
+MySQL executes SQL.
+
+---
+
+MySQL responds:
+
+```text
+Inserted Successfully
+```
+
+and generates:
+
+```text
+id = 1
+```
+
+because AUTO_INCREMENT.
+
+---
+
+# Session.refresh()
+
+After commit:
+
+```python
+session.refresh(medicine)
+```
+
+SQLAlchemy asks:
+
+```text
+Give me latest database row
+```
+
+MySQL returns:
+
+```text
+id = 1
+created_at = ...
+```
+
+Object becomes:
+
+```python
+Medicine(
+    id=1,
+    name="Crocin"
+)
+```
+
+---
+
+# Complete Internal Flow
+
+```text
+Frontend
+   ↓
+POST /medicines
+   ↓
+Router
+   ↓
+Service
+   ↓
+Repository
+   ↓
+Medicine ORM Object
+   ↓
+session.add()
+   ↓
+Pending Changes
+   ↓
+session.commit()
+   ↓
+SQL Generated
+   ↓
+INSERT INTO medicines...
+   ↓
+MySQL
+   ↓
+Row Stored
+   ↓
+ID Generated
+   ↓
+ORM Object Updated
+   ↓
+MedicineOut
+   ↓
+Router
+   ↓
+JSON Response
+   ↓
+Frontend
+```
+
+---
+
+# The 4 Things You Must Remember
+
+## MySQL
+
+Stores data.
+
+```text
+Actual filing cabinet
+```
+
+---
+
+## SQLAlchemy Model
+
+Defines mapping.
+
+```text
+Python Class
+     ↕
+Database Table
+```
+
+---
+
+## Session
+
+Temporary conversation with database.
+
+```text
+Open
+Work
+Close
+```
+
+---
+
+## Commit
+
+Actually saves data.
+
+```text
+add()
+    ≠ save
+
+commit()
+    = save
+```
+
+This is the single most important SQLAlchemy concept beginners miss.

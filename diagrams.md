@@ -440,3 +440,200 @@ graph TB
 ```
 
 ---
+
+## Phase 2 — Persistent Storage (MySQL + SQLAlchemy + Alembic)
+
+### Phase 2 step roadmap
+
+The order matters: get DB connectivity working before models, models before migrations, migrations before sessions, sessions before the new repository.
+
+```mermaid
+graph TD
+    A[2.1 DB setup<br/>SQLite or MySQL + driver] --> B[2.2 ERD design<br/>medicines batches customers sales]
+    B --> C[2.3 SQLAlchemy 2.0 models<br/>Medicine ORM class]
+    C --> D[2.4 Alembic init<br/>+ first migration]
+    D --> E[2.5 DB session + Depends<br/>per-request session]
+    E --> F[2.6 SQLAlchemyMedicineRepository<br/>same interface SQL backend]
+    F --> G[2.7 Swap repos in router<br/>service file untouched]
+    G --> H[2.8 Batch model + FEFO basics<br/>expiry-aware]
+    H --> I[2.9 Phase 2 commit]
+    I --> J[Phase 3: LangGraph AI]
+
+    classDef start fill:#a3e4a3,stroke:#1b5e20,stroke-width:2px,color:#000
+    classDef todo fill:#fff,stroke:#1565c0,stroke-width:2px,color:#000
+    classDef next fill:#ffe082,stroke:#e65100,stroke-width:2px,color:#000
+
+    class A start
+    class B,C,D,E,F,G,H,I todo
+    class J next
+```
+
+### Step 2.2 — Full pharmacy ERD
+
+Six entities, designed up front so we never refactor primary keys / foreign keys later.
+Phase 2 implements only MEDICINES + BATCHES (steps 2.3–2.8); CUSTOMERS / SALES / SALE_ITEMS / USERS land in Phase 3.
+
+```mermaid
+erDiagram
+    MEDICINES ||--o{ BATCHES : "stocked as"
+    BATCHES ||--o{ SALE_ITEMS : "sold in"
+    CUSTOMERS ||--o{ SALES : places
+    SALES ||--|{ SALE_ITEMS : contains
+    USERS ||--o{ SALES : "logged by"
+
+    MEDICINES {
+        int id PK
+        string name
+        string normalized_name UK "indexed for dedup"
+        decimal mrp
+        string hsn_code
+        string manufacturer "nullable"
+        datetime created_at
+        datetime updated_at
+    }
+
+    BATCHES {
+        int id PK
+        int medicine_id FK
+        string batch_number
+        date expiry_date "indexed for FEFO"
+        int quantity "remaining stock"
+        decimal cost_price "INTERNAL never exposed"
+        datetime created_at
+    }
+
+    CUSTOMERS {
+        int id PK
+        string name
+        string phone UK "indexed"
+        datetime created_at
+    }
+
+    SALES {
+        int id PK
+        int customer_id FK "nullable for walk-ins"
+        int user_id FK "who rang it up"
+        decimal total_amount
+        datetime created_at "indexed for reports"
+    }
+
+    SALE_ITEMS {
+        int id PK
+        int sale_id FK
+        int batch_id FK "FEFO-selected"
+        int quantity
+        decimal unit_price "MRP snapshot"
+        decimal subtotal
+    }
+
+    USERS {
+        int id PK
+        string email UK
+        string password_hash
+        string role "pharmacist or admin"
+        datetime created_at
+    }
+```
+
+### Step 2.3 — Where each Medicine "shape" lives (HTTP / Domain / DB / Foundation)
+
+The 3-way class separation senior backends always have. Conflating any two re-introduces the Phase-1 mistakes we already cured.
+
+```mermaid
+graph TB
+    subgraph HTTP[HTTP layer — app/schemas/medicine.py]
+        MC[MedicineCreate<br/>input contract]
+        MO[MedicineOut<br/>output contract]
+    end
+
+    subgraph Domain[Domain layer — unchanged]
+        Svc[MedicineService<br/>business rules]
+    end
+
+    subgraph DB[DB layer — app/models/medicine.py NEW]
+        ORM[Medicine ORM<br/>maps to medicines table]
+    end
+
+    subgraph Foundation[Foundation — app/core/database.py NEW]
+        Eng[engine + SessionLocal + Base]
+    end
+
+    MC -->|Pydantic validates| Svc
+    Svc -->|domain reads/writes| ORM
+    ORM -->|SELECT/INSERT via session| MySQL[(MySQL medicines table)]
+    ORM -.->|from_attributes hook| MO
+    MO -->|FastAPI serializes| Resp[HTTP JSON response]
+
+    Eng -.->|provides Base + Session| ORM
+
+    classDef http fill:#c8e6c9,stroke:#1b5e20,stroke-width:2px,color:#000
+    classDef svc fill:#fff9c4,stroke:#f57f17,stroke-width:2px,color:#000
+    classDef db fill:#bbdefb,stroke:#0d47a1,stroke-width:2px,color:#000
+    classDef found fill:#ffe082,stroke:#e65100,stroke-width:2px,color:#000
+    classDef mysql fill:#e0e0e0,stroke:#424242,stroke-width:2px,color:#000
+
+    class MC,MO http
+    class Svc svc
+    class ORM db
+    class Eng found
+    class MySQL mysql
+    class Resp http
+```
+
+### Step 2.5 — Per-request DB session lifecycle (yield-based Depends)
+
+One Session per HTTP request: opened on entry, closed on exit even if the endpoint raised. Connections borrowed from the engine pool, returned on close.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant C as Client
+    participant FA as FastAPI
+    participant GD as get_db
+    participant S as Session
+    participant E as Engine + Pool
+    participant DB as MySQL
+
+    C->>FA: POST /api/v1/medicines
+    FA->>GD: resolve Depends(get_db)
+    GD->>S: SessionLocal()
+    S->>E: borrow connection
+    E-->>S: connection
+    GD-->>FA: yield session
+    FA->>S: endpoint uses session
+    S->>DB: SELECT / INSERT
+    DB-->>S: rows / row id
+    S-->>FA: endpoint returns
+    FA->>GD: post-yield cleanup
+    GD->>S: session.close()
+    S->>E: connection back to pool
+    FA-->>C: HTTP 201 JSON
+```
+
+### Step 2.8 — Medicine 1:N Batches + FEFO selection
+
+One medicine → many batches. FEFO query picks the batch with the soonest non-expired expiry that still has stock.
+
+```mermaid
+graph TD
+    M[Crocin 500mg id=1]
+
+    M -->|1:N| B1[B-001 qty=50 exp 2026-06-01]
+    M -->|1:N| B2[B-002 qty=30 exp 2026-12-15]
+    M -->|1:N| B3[B-003 qty=10 exp 2026-08-10]
+
+    Q[FEFO query: next batch?]
+    Q -->|WHERE medicine_id=1<br/>AND quantity > 0<br/>AND expiry_date > NOW<br/>ORDER BY expiry_date ASC<br/>LIMIT 1| B1
+
+    classDef med fill:#bbdefb,stroke:#0d47a1,stroke-width:2px,color:#000
+    classDef pick fill:#a3e4a3,stroke:#1b5e20,stroke-width:2px,color:#000
+    classDef other fill:#fff9c4,stroke:#f57f17,stroke-width:2px,color:#000
+    classDef query fill:#c8e6c9,stroke:#1b5e20,stroke-width:2px,color:#000
+
+    class M med
+    class B1 pick
+    class B2,B3 other
+    class Q query
+```
+
+---

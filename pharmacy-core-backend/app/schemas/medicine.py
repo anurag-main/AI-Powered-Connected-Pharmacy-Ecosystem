@@ -10,7 +10,7 @@ and never appear in any schema sent to a client.
 """
 from datetime import datetime
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class MedicineCreate(BaseModel):
@@ -33,6 +33,11 @@ class MedicineOut(BaseModel):
     Never includes internal-only fields like cost_price or supplier_notes —
     those live in the repository layer only.
     """
+
+    # from_attributes=True lets MedicineOut.model_validate(orm_obj) read the
+    # values directly from a SQLAlchemy ORM row's attributes.
+    # Without this, model_validate would only accept dicts.
+    model_config = ConfigDict(from_attributes=True)
 
     id: int
     name: str
