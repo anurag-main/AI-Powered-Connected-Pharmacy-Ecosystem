@@ -674,3 +674,96 @@ END
 Each node has the same shape: takes `state`, returns a partial dict. The graph (`StateGraph.compile()`) wires them in order. We'll build that in Step 3.8.
 
 ---
+
+## Phase 3 — Step 3.3 — `resolve_medicine` (Priya the inventory clerk)
+
+### Continuing the candy-shop analogy
+
+Rohit (the LLM) filled the notebook pages. He hands the stack to Priya, the inventory clerk. Priya:
+
+1. Picks up a page → reads the candy name
+2. Walks to the shelves (the database)
+3. Finds the actual jar → reads its SKU number
+4. Sticks the SKU on the page
+5. Repeats for every page
+6. Puts unfound pages on the "can't find" pile and tells mom
+
+| Candy shop | Code |
+|---|---|
+| Priya | `resolve_medicine` node |
+| Shelves | `medicines` table in MySQL |
+| Candy name on page | `item["name"]` from `extracted_intent` |
+| Walk to shelves | `with SessionLocal() as db:` |
+| Find the jar | `repo.find_by_normalized_name(...)` |
+| SKU sticker | `medicine.id` (primary key) |
+| Stickered page | `{**item, "medicine_id": ...}` in `resolved_items` |
+| Can't-find pile | append to `state["errors"]` |
+
+### Why this node exists at all
+
+The LLM gives us a **string** (`"Crocin 500mg"`). Every downstream node — FEFO batch picker, server-side price calculator, invoice writer — needs an **integer primary key**.
+
+- Strings are fragile (casing, whitespace, typos).
+- Integer IDs are absolute and indexable.
+- This node is the **bridge from messy text to canonical DB references**.
+
+### Why we open a fresh `SessionLocal()` inside the node
+
+FastAPI's `Depends(get_db)` gives endpoints a per-request session. LangGraph nodes don't get that injection — so the node owns its own session lifecycle. The pattern:
+
+```python
+with SessionLocal() as db:
+    repo = SQLAlchemyMedicineRepository(db)
+    # ... use repo here ...
+# session auto-closed here, connection returned to pool
+```
+
+Same principle as `with open(...)` for files. The session must be cleaned up; the context manager guarantees it even if the loop raises.
+
+### Why we don't `raise` on missing medicine
+
+A real pharmacist might say *"Vitamin Q"* — typo or unstocked item. Aborting the whole order on one missing item is hostile UX. Instead:
+
+- **Found items** → enriched with `medicine_id` and added to `resolved_items`
+- **Unfound items** → appended as soft errors to `state["errors"]`
+- **The graph itself decides** later (step 3.8) whether to short-circuit or proceed partial
+
+This is called the **collect-then-decide** pattern. Senior-engineer reflex: never let one row of data crash an entire batch.
+
+### State evolution (where this node sits)
+
+```
+extract_intent   → state["extracted_intent"]   = {"items": [...], "customer_name": ..., "customer_phone": ...}
+resolve_medicine → state["resolved_items"]     = [{...item, "medicine_id": 42}, ...]
+                   state["errors"]              = [optional, list of unfound names]
+select_batch     → state["priced_items"]        = [{...item, "batch_id": ...,  "unit_price": ...}, ...]
+compute_pricing  → state["total_amount"]
+persist_sale     → state["sale_id"]
+```
+
+Each node enriches state by ADDING new keys. Earlier keys remain readable downstream — useful for audit / debugging.
+
+### Shape of `resolved_items` (the new contract)
+
+```python
+[
+    {"name": "Crocin 500mg", "quantity": 2, "unit": "strip", "medicine_id": 42},
+    {"name": "Benadryl cough syrup", "quantity": 1, "unit": "bottle", "medicine_id": 99},
+]
+```
+
+We use `{**item, "medicine_id": ...}` to preserve every key the LLM gave us PLUS the new resolved id. That dict-spread idiom is Python's neat way to "copy this dict and add one more key" without losing anything.
+
+### 3 production mistakes this design avoids
+
+1. **Forgetting to normalize before lookup** — the index is on `normalized_name`. Querying with raw text gives false negatives.
+2. **Crashing the whole order on one unfound item** — collect-then-decide is the senior pattern.
+3. **Holding a DB session for the whole graph** — long-held sessions starve the connection pool. One short session per node is the safe pattern.
+
+### Why update `BillingState` now (`medicine_id` → `resolved_items`)
+
+The Phase 2 state had `medicine_id: int` and `batch_id: int` — singular fields, assuming one medicine per sale. Step 3.2 broke that assumption by allowing many items per sentence. The state had to evolve: `resolved_items: list[dict]` and `priced_items: list[dict]` replace those singular fields cleanly.
+
+This is normal — state schemas evolve as the graph grows. The TypedDict + `total=False` makes this safe (no breaking changes for unused fields).
+
+---

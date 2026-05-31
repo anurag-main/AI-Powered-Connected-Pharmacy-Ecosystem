@@ -872,3 +872,60 @@ graph TB
 ```
 
 ---
+
+## Phase 3 / Step 3.3 — `resolve_medicine` node (Priya the inventory clerk)
+
+### What flows through the node
+
+```mermaid
+flowchart LR
+    A["state in:<br/>extracted_intent.items =<br/>[{name:'Crocin 500mg',qty:2,unit:'strip'},<br/>{name:'Unicorn Dust',qty:1,unit:'tube'}]"] --> B[open SessionLocal]
+    B --> C{for each item}
+    C --> D[normalize_medicine_name<br/>'Crocin 500mg' → 'crocin500mg']
+    D --> E[repo.find_by_normalized_name]
+    E -->|found| F["resolved_items.append<br/>{**item, medicine_id: 42}"]
+    E -->|None| G["errors.append<br/>'Medicine not found: ...'"]
+    F --> C
+    G --> C
+    C -->|done| H[close session]
+    H --> I["state out:<br/>resolved_items: [...]<br/>errors: [...]"]
+
+    classDef start fill:#e3f0ff,stroke:#003a8c,stroke-width:2px,color:#000
+    classDef step fill:#fff5d6,stroke:#a86b00,stroke-width:2px,color:#000
+    classDef ok fill:#e5fbe5,stroke:#1f7a1f,stroke-width:2px,color:#000
+    classDef err fill:#ffe5e5,stroke:#a83333,stroke-width:2px,color:#000
+    classDef out fill:#e3f0ff,stroke:#003a8c,stroke-width:2px,color:#000
+
+    class A,I start
+    class B,C,D,E,H step
+    class F ok
+    class G err
+```
+
+### State evolution across the billing graph
+
+```mermaid
+graph LR
+    A[pharmacist_input<br/>raw text] --> B[extract_intent<br/>LLM]
+    B --> C[extracted_intent<br/>+ items list]
+    C --> D[resolve_medicine<br/>DB lookup]
+    D --> E[resolved_items<br/>+ medicine_id per item]
+    E --> F[select_batch<br/>FEFO]
+    F --> G[priced_items<br/>+ batch_id + unit_price]
+    G --> H[compute_pricing]
+    H --> I[total_amount]
+    I --> J[persist_sale<br/>DB tx]
+    J --> K[sale_id]
+
+    classDef text fill:#fff5d6,stroke:#a86b00,stroke-width:2px,color:#000
+    classDef node fill:#e3f0ff,stroke:#003a8c,stroke-width:2px,color:#000
+    classDef todo fill:#f0f0f0,stroke:#666,stroke-width:1px,color:#666,stroke-dasharray: 5 5
+
+    class A,C,E,G,I,K text
+    class B,D node
+    class F,H,J todo
+```
+
+Solid blue = done, dashed grey = next steps.
+
+---
