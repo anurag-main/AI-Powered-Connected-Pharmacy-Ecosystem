@@ -19,8 +19,8 @@ class BillingState(TypedDict, total=False):
 
         INPUT                       pharmacist_input
         ↓ extract_intent (LLM)      extracted_intent
-        ↓ resolve_medicine (DB)     medicine_id
-        ↓ select_batch (DB FEFO)    batch_id
+        ↓ resolve_medicine (DB)     resolved_items     ← step 3.3
+        ↓ select_batch (DB FEFO)    priced_items       ← step 3.5
         ↓ compute_pricing           total_amount
         ↓ persist_sale (DB tx)      sale_id
         OUTPUT                      sale_id + total_amount returned to caller
@@ -30,15 +30,20 @@ class BillingState(TypedDict, total=False):
     pharmacist_input: str  # raw text typed or transcribed from voice
 
     # ----- Filled by extract_intent (LLM call) -----
-    # In step 3.2 this gets a stronger type via Pydantic (ExtractedIntent schema).
-    # For now we keep it as dict to keep the contract simple.
+    # Has shape: {"items": [...], "customer_name": str|None, "customer_phone": str|None}
     extracted_intent: dict
 
-    # ----- Filled by resolve_medicine — the matched DB row's id -----
-    medicine_id: int
+    # ----- Filled by resolve_medicine — each extracted item enriched with medicine_id -----
+    # Has shape: [
+    #   {"name": "Crocin 500mg", "quantity": 2, "unit": "strip", "medicine_id": 42},
+    #   ...
+    # ]
+    # If a medicine couldn't be found, it's NOT in this list — it's reported in `errors`.
+    resolved_items: list[dict]
 
-    # ----- Filled by select_batch — FEFO winner from Phase 2's select_fefo -----
-    batch_id: int
+    # ----- Filled by select_batch + compute_pricing (step 3.5+) -----
+    # Each item gains: batch_id, unit_price, line_total.
+    priced_items: list[dict]
 
     # ----- Filled by compute_pricing -----
     total_amount: float
