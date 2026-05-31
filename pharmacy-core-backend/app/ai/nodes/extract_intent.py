@@ -36,14 +36,17 @@ def extract_intent(state: BillingState) -> dict:
     # Use state.get(...) with a default of "" so a missing key doesn't crash.
     # Write 1 line below:
     #     pharmacist_input: str = state.get("pharmacist_input", "")
-
+    
+    pharmacist_input:str =state.get("pharmacist_input" , "")
 
     # YOUR JOB 2 — empty-input guard
     # If pharmacist_input is empty or only whitespace, return early with
     # an errors list — do NOT call the LLM (saves money, surfaces bugs cleanly).
     # Return shape:  {"errors": ["pharmacist_input is empty"]}
     # Write 2 lines below (an `if` and a `return`):
-
+    if not pharmacist_input.strip():
+        return {"errors": ["pharmacist_input is empty"]}
+    
 
     # YOUR JOB 3 — build the structured LLM chain
     # Step A: get the cached client (Maverick) via get_llm()
@@ -52,6 +55,9 @@ def extract_intent(state: BillingState) -> dict:
     # Write 2 lines below:
     #     llm = get_llm()
     #     structured_llm = llm.with_structured_output(ExtractedIntent)
+    
+    llm=get_llm()
+    structured_llm =llm.with_structured_output(ExtractedIntent)
 
 
     # YOUR JOB 4 — build the messages list
@@ -59,7 +65,15 @@ def extract_intent(state: BillingState) -> dict:
     #   - SystemMessage(content=EXTRACT_INTENT_SYSTEM_PROMPT_V1)  ← the instruction card
     #   - HumanMessage(content=pharmacist_input)                  ← the kid's words
     # Write the list below (3 lines):
-
+    
+    messages = [
+    SystemMessage(
+        content=EXTRACT_INTENT_SYSTEM_PROMPT_V1
+    ),
+    HumanMessage(
+        content=pharmacist_input
+    ),
+]
 
     # YOUR JOB 5 — invoke the chain
     # Call structured_llm.invoke(messages). The return is an ExtractedIntent instance.
@@ -67,6 +81,7 @@ def extract_intent(state: BillingState) -> dict:
     # retries in a later step).
     # Write 1 line below:
     #     result: ExtractedIntent = structured_llm.invoke(messages)
+    result:ExtractedIntent=structured_llm.invoke(messages)
 
 
     # YOUR JOB 6 — return the state update
@@ -75,9 +90,7 @@ def extract_intent(state: BillingState) -> dict:
     # Use result.model_dump() to convert Pydantic → dict.
     # Write 1 line below:
     #     return {"extracted_intent": result.model_dump()}
-
-    # Replace this placeholder when you've written the steps above:
-    raise NotImplementedError("YOUR JOB markers not implemented yet")
+    return {"extracted_intent": result.model_dump()}
 
 
 # ============================================================================
