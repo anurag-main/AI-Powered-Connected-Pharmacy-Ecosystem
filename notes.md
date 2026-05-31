@@ -424,3 +424,253 @@ In 6 months, `git log --oneline | grep "fix:"` becomes searchable.
 | **CRUD** | Create, Read, Update, Delete — the four basic data operations |
 
 ---
+
+## Phase 3 — Step 3.1 ✅ DONE — Provider Factory Verified (2026-05-31)
+
+**Milestone:** First real call to a hosted LLM succeeded — NVIDIA AI Endpoints + `mistralai/mistral-nemotron` returned `AIMessage(content='pharmacy-ok')` to a temperature-0 echo prompt.
+
+### What this proves about the wiring
+
+| Layer | Verified |
+|---|---|
+| `.env` parsing | `_load_dotenv` correctly read `LLM_PROVIDER=nvidia` and the API key |
+| Placeholder guard | `_is_placeholder()` rejected `YOUR_NVIDIA_KEY_HERE` earlier; passes real `nvapi-...` |
+| Provider dispatch | `get_llm()` branch picked `_build_nvidia_client()` based on env var |
+| Lazy import | `langchain_nvidia_ai_endpoints` only imported when actually used (good: OpenAI-only users don't pay the import cost) |
+| Network + auth | Real HTTPS call to `integrate.api.nvidia.com/v1/chat/completions` returned 200 |
+| Model catalog | `mistralai/mistral-nemotron` is a valid model ID on NVIDIA's endpoint |
+| LangChain contract | Return is a proper `AIMessage`, not a tuple/dict — `.content` access works |
+| Determinism | `temperature=0.0` made the model echo our string exactly (good for billing — we cannot have creative invoices) |
+
+### 3 production mistakes this smoke test would have caught early
+
+1. **Hardcoding the model name in node code** — if `extract_intent.py` had said `ChatNVIDIA(model="mistral-7b")` directly, swapping models means edits in N files. Going through `MODEL_NAME` from config = one-line swap.
+2. **Treating quoted .env values as quoted** — our `.env` had `NVIDIA_API_KEY="nvapi-...."` with literal quotes pasted in. Our minimal loader does NOT strip quotes, so NVIDIA received `"nvapi-..."` (with the `"`) → 401. Standard `python-dotenv` strips quotes silently; ours doesn't. **Lesson:** know exactly what your env-loader does. Fixed by removing quotes from the value.
+3. **No "real call" test before writing 5 nodes** — if we'd skipped this and built `extract_intent → resolve_medicine → select_batch → compute_pricing → persist_sale` first, then discovered the key was bad, every node's debugging would point at the wrong layer. **Always smoke-test the dial tone before wiring the phone tree.**
+
+### Mental model: the provider factory pattern
+
+```
+node code               app/ai/llm.py            provider packages
+─────────               ─────────────            ─────────────────
+get_llm()    ───►  LLM_PROVIDER == "nvidia"? ──► ChatNVIDIA
+                   LLM_PROVIDER == "openai"? ──► ChatOpenAI
+                   anything else?            ──► RuntimeError
+```
+
+Every node calls `get_llm()`. NO node knows which provider it's talking to. That's the swap-by-env-var goal.
+
+### Why `@lru_cache(maxsize=1)` on `get_llm()`
+
+Same idea as a database connection pool — building a `ChatNVIDIA(...)` once is cheap, but doing it for every node call wastes time and means cold reloading of API key validation. `lru_cache` makes the second call return the *same* client object instantly. The `1` is the cache size — we only ever want one client per process.
+
+---
+
+## Phase 3 — Step 3.2 (in progress) — File 1: ExtractedIntent schema
+
+### The candy-shop notebook analogy
+
+Mom runs a candy shop and gives you a notebook. Every page has 3 boxes: *What candy? / How many? / Big or small?*. At the top of the stack of pages, two more boxes: *Who is the kid? / Mommy's phone?*. Rules: fill ONE page per candy, no empty boxes, no drawing extra boxes.
+
+| In the candy shop | In our code |
+|---|---|
+| One page filled in | One `MedicineItem` instance |
+| Whole stack + top labels | One `ExtractedIntent` instance |
+| You (the kid) filling pages | The LLM producing JSON |
+| Mom checking pages | Pydantic validating the JSON |
+| Mom rejecting a bad page | `ValidationError` |
+| The notebook design itself | The Pydantic BaseModel class definitions |
+
+### Why a schema matters (the *production* reason)
+
+Without a schema, the LLM returns whatever-flavored text it wants. With a schema, we tell the LLM "you MUST return a JSON object that fits this exact shape, and we will reject anything else." This is what `llm.with_structured_output(ExtractedIntent)` does — it constrains the LLM's output and validates it through Pydantic.
+
+For billing this is critical: a fuzzy free-text reply from the LLM cannot be used to debit stock. A validated `ExtractedIntent` with an `int` quantity in 1..1000 can.
+
+### The two-class split (`MedicineItem` and `ExtractedIntent`)
+
+One pharmacist sentence can name MANY medicines. The customer name + phone appear ONCE per sentence, not once per medicine. So:
+
+- `MedicineItem` = the *repeating* part (name, quantity, unit)
+- `ExtractedIntent` = the *whole* parsed sentence (list of items + customer info)
+
+This is the same pattern as an HTML form with a repeating table inside — one form metadata block, many table rows.
+
+### Field-by-field rationale
+
+| Field | Type | Constraint | Why |
+|---|---|---|---|
+| `MedicineItem.name` | `str` | required | The LLM should NEVER skip this — without a name we have no medicine to bill |
+| `MedicineItem.quantity` | `int` | `ge=1, le=1000` | Must be a whole number ≥1 (you can't sell -3 strips); capped at 1000 to bound hallucinations |
+| `MedicineItem.unit` | `str` | required, free-form for now | Constrained-list later (`Literal["strip","bottle","tablet","ml"]`) when we know the full set |
+| `ExtractedIntent.items` | `list[MedicineItem]` | `min_length=1` | Empty list = the sentence was gibberish; better to reject than create a $0 invoice |
+| `ExtractedIntent.customer_name` | `Optional[str]` | default `None` | Pharmacist may just say "give me Crocin" without naming the customer |
+| `ExtractedIntent.customer_phone` | `Optional[str]` | default `None` | Stored as `str`, NOT `int`, because phones can have leading zeros |
+
+### 3 production mistakes this design prevents
+
+1. **Phone as `int`** — would silently drop leading zeros, breaking customer lookups later.
+2. **No `min_length=1` on items** — empty list would slip through validation and produce a zero-line invoice nobody could trace back to a real order.
+3. **No `le=1000` on quantity** — a model hallucination like `2 × 10^400` (we literally saw this on Mistral-Nemotron) would attempt to debit absurd stock; the cap rejects the page BEFORE it touches the DB.
+
+### Why `description=...` on every Field
+
+The LLM is given the schema as part of its instructions. The `description` is the LLM's hint about what each box means. An empty description = the LLM guessing from the field name only. A good description is half the prompt. **Treat `description=` as the prompt for that field.**
+
+### `if __name__ == "__main__":` block at the bottom
+
+Lets you run `python -m app.ai.schemas.extracted_intent` directly to sanity-check the schema BUILDS — no LLM call needed, just proves the field rules compile.
+
+---
+
+## Phase 3 — Step 3.2 — File 2: `billing_prompts.py` (the instruction card)
+
+### Continuing the candy-shop analogy
+
+Mom hired Rohit (the LLM). Before he serves any kid, she hands him a small instruction card. The card never changes mid-day. The card has 5 sections:
+
+1. **Role** — who Rohit is (focuses him into a persona)
+2. **Task** — what he does
+3. **Rules** — guardrails: never invent, lowercase, leave blanks null
+4. **Output format** — how his answer must look (JSON only)
+5. **Examples** — 1–2 sample "kid said X → Rohit wrote Y" demonstrations
+
+| In the candy shop | In our code |
+|---|---|
+| The instruction card | A Python `str` constant: `EXTRACT_INTENT_SYSTEM_PROMPT_V1` |
+| Rohit reading the card every morning | The LLM consuming the system message at the start of every call |
+| Mom rewriting the card next month | Adding `EXTRACT_INTENT_SYSTEM_PROMPT_V2` and switching nodes to use it |
+
+### Why a SEPARATE FILE for prompts (production reason)
+
+Prompts are **products**, not strings.
+
+- They take many tries to tune. Burying one inside a node function makes iteration painful.
+- We version them (`_V1`, `_V2`) so we can A/B test and roll back without touching node code.
+- Multiple nodes can share a base persona — common Role/Rules block extracted, specialized per node.
+
+In senior-engineer-land this is called **prompt engineering as a first-class artifact**. Same way you wouldn't hardcode an SQL query inside a button click handler — you'd put it in a repository file. Prompts deserve the same respect.
+
+### The 5-section system-prompt structure (industry standard)
+
+| Section | Purpose | Pitfall |
+|---|---|---|
+| **ROLE** | Set the LLM's persona ("you are a strict pharmacy order-taker") | Vague roles ("assistant") lose focus — be specific |
+| **TASK** | Name the action precisely (extract / parse / structure) | Mixed actions in one node = confused output |
+| **RULES** | Concrete guardrails, numbered | Vague rules like "be careful" do nothing |
+| **OUTPUT FORMAT** | How the answer must look (JSON / table / etc.) | Skipping this lets the LLM add prose around the JSON |
+| **EXAMPLES** | 1–3 input-output pairs (few-shot learning) | This is the single highest-leverage section. **2 examples > 10 rules.** |
+
+### Few-shot learning in plain words
+
+"Few-shot" = giving the LLM a tiny handful of examples right inside the prompt. Models learn FAR more from one well-chosen example than from a paragraph of rules. The technical reason: examples are the LLM's strongest "this is the pattern" signal — it will copy what it sees more reliably than what it's told.
+
+### Naming convention: `<USE_CASE>_SYSTEM_PROMPT_V<n>`
+
+- `EXTRACT_INTENT_SYSTEM_PROMPT_V1` (this file)
+- Future: `RESOLVE_MEDICINE_SYSTEM_PROMPT_V1`, `COMPUTE_PRICING_SYSTEM_PROMPT_V1`
+- After improving: `EXTRACT_INTENT_SYSTEM_PROMPT_V2` — `V1` stays in the file so we can revert.
+
+### 3 production mistakes this design avoids
+
+1. **Hardcoded prompts inside node functions** — un-A/B-testable, un-rollbackable, un-shareable.
+2. **No few-shot examples** — outputs drift, especially on cheaper/smaller models like Maverick-17B.
+3. **Mixing rules and examples without section labels** — models attend to structure; an unlabeled wall of text confuses them.
+
+### How the prompt actually gets used at runtime
+
+In `app/ai/nodes/extract_intent.py` (File 3, coming next):
+
+```
+llm = get_llm()
+chain = llm.with_structured_output(ExtractedIntent)
+result = chain.invoke([
+    SystemMessage(content=EXTRACT_INTENT_SYSTEM_PROMPT_V1),
+    HumanMessage(content=pharmacist_sentence),
+])
+```
+
+The system message is the instruction card. The human message is the kid speaking. The structured-output wrapper is mom checking the filled page.
+
+---
+
+## Phase 3 — Step 3.2 — File 3: `extract_intent.py` (the node where it all connects)
+
+### Continuing the candy-shop analogy
+
+A kid walks in. Rohit's 6-step routine:
+
+1. 👂 **Listen** to what the kid says → `state.get("pharmacist_input", "")`
+2. 🛑 **Silent kid?** → return errors, don't bother mom. *Cheap check before expensive LLM call.*
+3. 📇 **Pull the instruction card** → `SystemMessage(content=EXTRACT_INTENT_SYSTEM_PROMPT_V1)`
+4. 📓 **Open the notebook** (force the LLM into the schema) → `.with_structured_output(ExtractedIntent)`
+5. ✍️ **Fill the page** → `.invoke([system, human])` — this is the REAL NVIDIA API call
+6. 🧺 **Drop in mom's basket** → `return {"extracted_intent": result.model_dump()}`
+
+### Why LangGraph state is a TypedDict + we return a partial dict
+
+LangGraph's nodes don't return the whole state — they return a **partial update**:
+
+```python
+return {"extracted_intent": ...}   # just the key(s) you touched
+```
+
+LangGraph **merges** that into the existing state. This is:
+- **Safer** — you don't accidentally wipe a field you didn't mean to touch
+- **Cleaner** — your node says exactly what it changed
+- **Composable** — multiple nodes can return different partial updates; LangGraph stitches them
+
+Think of it like `git diff` instead of overwriting the whole file.
+
+### Why `model_dump()` at the state boundary
+
+LangGraph state often gets serialized (checkpoints, debug logs, time-travel replay). Pydantic objects don't always serialize cleanly. The **rule of thumb**:
+
+> Pydantic objects live INSIDE a function. At the boundary (state, JSON, queue), convert to plain dict via `model_dump()`.
+
+This is the same principle as the FastAPI rule we already follow: SQLAlchemy models live in the repository, Pydantic models live at the API boundary.
+
+### LangChain message types — the convention
+
+- `SystemMessage(content=...)` — instructions, persona, rules. Sent **first**.
+- `HumanMessage(content=...)` — actual user input. Sent **after** the system message.
+- `AIMessage(content=...)` — the model's response (you usually don't construct these manually).
+
+Models are trained on this exact ordering. **System first, human after.** Reversing the order can silently degrade output — some models will follow the LAST message most strongly.
+
+### Why the empty-input guard saves money + bugs
+
+A real user might press "submit" on an empty form. Calling Maverick with `""` :
+- Costs money (yes, free trial credits — but they're finite)
+- Returns garbage (or worse, makes something up)
+- Slows down the request needlessly
+
+The guard runs in ~1 microsecond and short-circuits the whole thing. Senior engineers always check the cheap conditions first. This is the same instinct as `if not user.is_authenticated: return 401` before touching the DB.
+
+### 3 production mistakes this design avoids
+
+1. **No empty-input guard** — wastes money + lets garbage flow downstream.
+2. **Returning the raw Pydantic instance in state** — breaks LangGraph checkpoint serialization.
+3. **Hard-coding the prompt string inside the node** — undoes the whole reason we split into 4 files; un-versionable, un-A/B-testable.
+
+### How this node lives in the bigger graph (preview of File 4 and beyond)
+
+```
+START
+  ↓
+[extract_intent]   ← what you're building NOW
+  ↓
+[resolve_medicine] ← Step 3.4: look up DB by extracted name
+  ↓
+[select_batch]     ← Step 3.5: FEFO pick from app.repositories
+  ↓
+[compute_pricing]  ← Step 3.6: server-side price math
+  ↓
+[persist_sale]     ← Step 3.7: write Sale + SaleItem in one transaction
+  ↓
+END
+```
+
+Each node has the same shape: takes `state`, returns a partial dict. The graph (`StateGraph.compile()`) wires them in order. We'll build that in Step 3.8.
+
+---

@@ -4000,3 +4000,704 @@ commit()
 ```
 
 This is the single most important SQLAlchemy concept beginners miss.
+
+# Phase 3 - LangGraph Explained Like a Kid
+
+## The Biggest Mindset Shift
+
+### Phase 1 & Phase 2
+
+Traditional Backend:
+
+```text
+User
+ ↓
+API
+ ↓
+Database
+```
+
+Example:
+
+```text
+Create Medicine
+      ↓
+Router
+      ↓
+Service
+      ↓
+Repository
+      ↓
+MySQL
+```
+
+Everything is predictable.
+
+---
+
+## Phase 3
+
+Now we introduce AI.
+
+Example input:
+
+```text
+2 strips Crocin 500mg for Anurag
+```
+
+The system must figure out:
+
+```text
+What medicine?
+How many?
+Which customer?
+Which batch?
+How much price?
+Create invoice?
+```
+
+Now the system needs multiple steps.
+
+---
+
+# Think Factory Assembly Line
+
+A car factory doesn't have one worker doing everything.
+
+```text
+Worker 1 → Install Engine
+
+Worker 2 → Install Doors
+
+Worker 3 → Paint Car
+
+Worker 4 → Quality Check
+```
+
+Each worker does one job.
+
+LangGraph works exactly the same way.
+
+---
+
+# AI Billing Workflow
+
+```text
+Pharmacist Input
+
+"2 strips Crocin 500mg for Anurag"
+
+        ↓
+
+Extract Intent
+
+        ↓
+
+Resolve Medicine
+
+        ↓
+
+Select Batch
+
+        ↓
+
+Compute Pricing
+
+        ↓
+
+Persist Sale
+
+        ↓
+
+Return Invoice
+```
+
+Each box above is called a Node.
+
+---
+
+# What Is A Node?
+
+A node is one small job.
+
+Example:
+
+```text
+Extract Intent
+```
+
+File:
+
+```text
+app/ai/nodes/extract_intent.py
+```
+
+Input:
+
+```text
+2 strips Crocin 500mg for Anurag
+```
+
+Output:
+
+```json
+{
+  "medicine_name": "Crocin 500mg",
+  "qty": 2,
+  "customer_name": "Anurag"
+}
+```
+
+The node has one responsibility.
+
+---
+
+# Why One Node Per File?
+
+Bad:
+
+```text
+billing_graph.py
+
+2000 lines
+```
+
+Contains:
+
+```text
+Prompts
+Nodes
+Pricing
+Tools
+Database Calls
+```
+
+Nobody understands it.
+
+---
+
+Good:
+
+```text
+nodes/
+
+extract_intent.py
+
+resolve_medicine.py
+
+select_batch.py
+
+compute_pricing.py
+
+persist_sale.py
+```
+
+Each file:
+
+```text
+One Job
+```
+
+Easy to test.
+
+Easy to maintain.
+
+Easy to debug.
+
+---
+
+# What Is State?
+
+Most Important LangGraph Concept.
+
+Think:
+
+```text
+Clipboard
+```
+
+The clipboard travels through every station.
+
+---
+
+Initially:
+
+```python
+state = {
+    "input_text":
+        "2 strips Crocin 500mg for Anurag"
+}
+```
+
+---
+
+After Extract Intent:
+
+```python
+state = {
+    "input_text": "...",
+
+    "medicine_name":
+        "Crocin 500mg",
+
+    "qty":
+        2,
+
+    "customer_name":
+        "Anurag"
+}
+```
+
+---
+
+After Resolve Medicine:
+
+```python
+state = {
+    ...
+    "medicine_id": 1
+}
+```
+
+---
+
+After Select Batch:
+
+```python
+state = {
+    ...
+    "batch_id": 5
+}
+```
+
+---
+
+After Pricing:
+
+```python
+state = {
+    ...
+    "total": 51.00
+}
+```
+
+---
+
+Think:
+
+```text
+State = Shared Memory
+
+for all nodes
+```
+
+Every node reads and updates the clipboard.
+
+---
+
+# What Is Graph?
+
+Graph is simply the wiring between nodes.
+
+Example:
+
+```text
+Extract Intent
+      ↓
+Resolve Medicine
+      ↓
+Select Batch
+      ↓
+Pricing
+      ↓
+Persist Sale
+```
+
+File:
+
+```text
+app/ai/graphs/billing_graph.py
+```
+
+Think:
+
+```text
+Graph = Factory Floor Plan
+```
+
+The graph decides:
+
+```text
+Which node runs next?
+```
+
+---
+
+# What Are Tools?
+
+Tools are functions the AI can use.
+
+Example:
+
+```text
+search_medicines.py
+```
+
+Tool:
+
+```python
+search_medicine("crocin")
+```
+
+returns:
+
+```json
+{
+  "id": 1,
+  "name": "Crocin 500mg"
+}
+```
+
+Think:
+
+```text
+Tool = Function AI Can Call
+```
+
+Instead of guessing, the AI asks a tool.
+
+---
+
+# What Are Prompts?
+
+Prompt tells AI how to behave.
+
+Example:
+
+```text
+You are a pharmacy assistant.
+
+Extract:
+- Medicine Name
+- Quantity
+- Customer Name
+```
+
+Stored in:
+
+```text
+app/ai/prompts/billing_prompts.py
+```
+
+Why separate file?
+
+Because:
+
+```text
+Prompt Changes Frequently
+
+Code Changes Less Frequently
+```
+
+Different responsibilities.
+
+---
+
+# What Are AI Schemas?
+
+You already have:
+
+```text
+app/schemas/
+```
+
+Examples:
+
+```python
+MedicineCreate
+MedicineOut
+```
+
+These are API schemas.
+
+---
+
+AI also needs schemas.
+
+Example:
+
+```python
+ExtractedIntent
+```
+
+```python
+{
+  "medicine_name": str,
+  "qty": int,
+  "customer_name": str
+}
+```
+
+Stored in:
+
+```text
+app/ai/schemas/
+```
+
+Purpose:
+
+```text
+Validate LLM Output
+```
+
+---
+
+# Why State Uses TypedDict
+
+Bad:
+
+```python
+state = {}
+```
+
+Node 1:
+
+```python
+state["medicine_name"]
+```
+
+Node 4:
+
+```python
+state["medicine"]
+```
+
+Typo.
+
+Crash.
+
+---
+
+Good:
+
+```python
+class BillingState(TypedDict):
+    medicine_name: str
+    qty: int
+```
+
+IDE helps.
+
+Type checker helps.
+
+Safer.
+
+---
+
+# Complete Folder Structure
+
+```text
+app/ai/
+
+├── config.py
+├── llm.py
+
+├── state/
+│   └── billing_state.py
+
+├── graphs/
+│   └── billing_graph.py
+
+├── nodes/
+│   ├── extract_intent.py
+│   ├── resolve_medicine.py
+│   ├── select_batch.py
+│   ├── compute_pricing.py
+│   └── persist_sale.py
+
+├── tools/
+│   ├── search_medicines.py
+│   └── lookup_customer.py
+
+├── prompts/
+│   └── billing_prompts.py
+
+└── schemas/
+    └── extracted_intent.py
+```
+
+---
+
+# Complete Request Flow
+
+Input:
+
+```text
+2 strips Crocin 500mg for Anurag
+```
+
+Flow:
+
+```text
+Router
+  ↓
+
+Billing Service
+  ↓
+
+Billing Graph
+  ↓
+
+Node 1
+Extract Intent
+  ↓
+
+Node 2
+Resolve Medicine
+  ↓
+
+Node 3
+Select Batch
+  ↓
+
+Node 4
+Compute Pricing
+  ↓
+
+Node 5
+Persist Sale
+  ↓
+
+Database
+  ↓
+
+Invoice Generated
+  ↓
+
+Frontend
+```
+
+---
+
+# Real Example Of State Changes
+
+Initial:
+
+```python
+{
+    "input_text":
+        "2 strips Crocin 500mg for Anurag"
+}
+```
+
+---
+
+After Extract Intent:
+
+```python
+{
+    "medicine_name":
+        "Crocin 500mg",
+
+    "qty":
+        2,
+
+    "customer_name":
+        "Anurag"
+}
+```
+
+---
+
+After Resolve Medicine:
+
+```python
+{
+    "medicine_id":
+        1
+}
+```
+
+---
+
+After Batch Selection:
+
+```python
+{
+    "batch_id":
+        5
+}
+```
+
+---
+
+After Pricing:
+
+```python
+{
+    "total":
+        51.00
+}
+```
+
+---
+
+After Persist Sale:
+
+```python
+{
+    "sale_id":
+        42
+}
+```
+
+---
+
+Final Response:
+
+```json
+{
+  "sale_id": 42,
+  "total": 51.0
+}
+```
+
+---
+
+# Biggest Learning
+
+Backend Thinking:
+
+```text
+Function A
+ ↓
+Function B
+ ↓
+Function C
+```
+
+---
+
+LangGraph Thinking:
+
+```text
+State
+ ↓
+Node
+ ↓
+Updated State
+ ↓
+Node
+ ↓
+Updated State
+ ↓
+Node
+```
+
+The State moves through the workflow.
+
+Each node updates the state.
+
+The graph controls where the state goes next.
+
+That is the core idea behind LangGraph.
