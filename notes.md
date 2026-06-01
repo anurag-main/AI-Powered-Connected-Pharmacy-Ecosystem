@@ -767,3 +767,93 @@ The Phase 2 state had `medicine_id: int` and `batch_id: int` — singular fields
 This is normal — state schemas evolve as the graph grows. The TypedDict + `total=False` makes this safe (no breaking changes for unused fields).
 
 ---
+
+## Phase 3 — Step 3.4 — `select_batch` (Sanjay the storeroom manager)
+
+### Continuing the candy-shop analogy
+
+Priya stickered every page with the SKU. Now Sanjay takes each page:
+1. Finds every box of that candy on the shelves
+2. Throws out boxes past their expiry date
+3. Skips empty boxes
+4. From what's left, picks the one that **expires soonest**
+5. Checks: enough candy in this box? If not → "out of stock"
+6. Writes the batch number + expiry date on the page
+
+Sanjay's rule: *"Always open the older one first. Never let the older box rot while we sell the fresh one."*
+
+### FEFO — what it is, why it matters
+
+**FEFO = First Expiry, First Out.** When you have multiple batches of the same medicine, you ALWAYS sell from the soonest-expiring batch first. Why?
+
+| Reason | Without FEFO |
+|---|---|
+| Customer safety | Could sell expired medicine — illegal + dangerous |
+| Inventory rotation | Older stock rots while fresh sells → financial waste |
+| Regulatory compliance | India's Drugs & Cosmetics Act mandates it; audit failures are common |
+| Cost control | Each expired strip is a direct write-off |
+
+**FEFO is THE single most important business rule in pharmacy software.** If you take ONE thing from Phase 3 to interviews, take this.
+
+### How FEFO is enforced in the SQL
+
+We already wrote this in Phase 2 — `SQLAlchemyBatchRepository.select_fefo()`:
+
+```sql
+SELECT * FROM batches
+WHERE medicine_id = :id
+  AND quantity > 0                 -- skip empty batches
+  AND expiry_date > CURRENT_DATE   -- skip expired batches (MySQL-side date for timezone safety)
+ORDER BY expiry_date ASC
+LIMIT 1                            -- the soonest-expiring survivor
+```
+
+The composite `(medicine_id, expiry_date)` index makes this a **single B-tree seek** — fast even at millions of batch rows. This is why we added that exact index in Phase 2's migration.
+
+### Why this node is "easy mode" compared to extract_intent
+
+- No new LLM call (deterministic SQL)
+- No new SQL (Phase 2's `select_fefo` already does the work)
+- Same `with SessionLocal()` pattern as `resolve_medicine`
+- Same collect-then-decide error pattern
+
+It's almost pure glue code. **Most senior engineering is gluing well-built pieces together — you're learning that pattern.**
+
+### The "FEFO winner has insufficient stock" case
+
+The FEFO query returns the soonest-expiring batch with `quantity > 0`. It does NOT check if that batch has enough for the ORDER. So a batch with 3 strips can be returned for an order of 5.
+
+In this step, that → error. In a future enhancement (step 3.5+), we'll implement **multi-batch split**: take 3 from batch A and 2 from batch B (also in FEFO order). Today we keep it simple.
+
+### Why we `.isoformat()` the expiry_date before putting it in state
+
+`json.dumps()` can't serialize `datetime.date` objects natively. If state["batched_items"] contains a raw `date`, any:
+- LangGraph checkpoint (persisted state)
+- Debug `print(json.dumps(state))`
+- Time-travel replay (LangGraph feature)
+
+...will fail with `TypeError: Object of type date is not JSON serializable`. The pattern:
+
+> **Strings live in state. Date objects live inside functions.** Convert at the boundary.
+
+Same instinct as `result.model_dump()` for Pydantic → dict conversions at the state boundary.
+
+### State evolution after step 3.4
+
+```
+extract_intent   → state["extracted_intent"]
+resolve_medicine → state["resolved_items"]   (adds medicine_id)
+select_batch     → state["batched_items"]    (adds batch_id, batch_number, expiry_date)
+compute_pricing  → state["priced_items"]     (adds unit_price, line_total)  [step 3.5]
+persist_sale     → state["sale_id"]                                          [step 3.7]
+```
+
+Each list field is OWNED by one node — single-writer principle. Makes audit + debugging much easier.
+
+### 3 production mistakes this design prevents
+
+1. **Picking any batch, not the FEFO winner** — silently rots inventory and fails audits.
+2. **Missing the quantity check** — would write Sale rows that exceed batch stock, breaking the `quantity_remaining >= 0` invariant.
+3. **Storing a Python `date` in serializable state** — explodes the first time LangGraph tries to checkpoint or log.
+
+---

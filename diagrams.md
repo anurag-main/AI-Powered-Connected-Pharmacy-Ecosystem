@@ -929,3 +929,67 @@ graph LR
 Solid blue = done, dashed grey = next steps.
 
 ---
+
+## Phase 3 / Step 3.4 — `select_batch` node (Sanjay the storeroom manager)
+
+### Inside one call to the node
+
+```mermaid
+flowchart TD
+    A["state in:<br/>resolved_items =<br/>[{name, qty, unit, medicine_id}, ...]"] --> B[open SessionLocal]
+    B --> C{for each item}
+    C --> D["repo.select_fefo(medicine_id)<br/>SQL: WHERE medicine_id = X<br/>AND quantity > 0<br/>AND expiry_date > today<br/>ORDER BY expiry_date ASC LIMIT 1"]
+    D --> E{batch found?}
+    E -- "None — no usable batch" --> F["errors.append<br/>'No stocked batch for X'"]
+    E -- found --> G{batch.qty<br/>>= item.qty?}
+    G -- no --> H["errors.append<br/>'Insufficient stock: need N, only M'"]
+    G -- yes --> I["batched_items.append<br/>{...item, batch_id, expiry_date}"]
+    F --> C
+    H --> C
+    I --> C
+    C -->|done| J[close session]
+    J --> K["state out:<br/>batched_items: [...]<br/>errors: [...]"]
+
+    classDef start fill:#e3f0ff,stroke:#003a8c,stroke-width:2px,color:#000
+    classDef step fill:#fff5d6,stroke:#a86b00,stroke-width:2px,color:#000
+    classDef ok fill:#e5fbe5,stroke:#1f7a1f,stroke-width:2px,color:#000
+    classDef err fill:#ffe5e5,stroke:#a83333,stroke-width:2px,color:#000
+
+    class A,K start
+    class B,C,D,E,G,J step
+    class I ok
+    class F,H err
+```
+
+### FEFO visualized — why Sanjay always picks the older box
+
+```mermaid
+graph TB
+    subgraph crocin[All batches of Crocin 500mg in DB]
+        B1["Batch #A001<br/>Expires: 2026-02-15<br/>Qty: 25"]
+        B2["Batch #A002<br/>Expires: 2026-04-30<br/>Qty: 100"]
+        B3["Batch #A003<br/>Expires: 2025-11-30<br/>EXPIRED — ignored"]
+        B4["Batch #A004<br/>Expires: 2027-01-10<br/>Qty: 0 (empty) — ignored"]
+    end
+    Q["select_fefo(medicine_id=Crocin)"]
+    P["Pick = Batch #A001<br/>(soonest-expiring with stock)"]
+
+    Q -.filter expired.-> crocin
+    Q -.filter empty.-> crocin
+    Q -.order by expiry ASC, LIMIT 1.-> crocin
+    crocin --> P
+
+    classDef batch fill:#fff5d6,stroke:#a86b00,stroke-width:2px,color:#000
+    classDef expired fill:#f0f0f0,stroke:#999,stroke-width:1px,color:#666
+    classDef pick fill:#e5fbe5,stroke:#1f7a1f,stroke-width:3px,color:#000
+    classDef query fill:#e3f0ff,stroke:#003a8c,stroke-width:2px,color:#000
+
+    class B1,B2 batch
+    class B3,B4 expired
+    class P pick
+    class Q query
+```
+
+The composite index `(medicine_id, expiry_date)` makes this a single B-tree seek — fast even with millions of batch rows.
+
+---
