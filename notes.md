@@ -857,3 +857,114 @@ Each list field is OWNED by one node — single-writer principle. Makes audit + 
 3. **Storing a Python `date` in serializable state** — explodes the first time LangGraph tries to checkpoint or log.
 
 ---
+
+## Phase 3 — Step 3.5 — `compute_pricing` (Meera the cashier)
+
+### Continuing the candy-shop analogy
+
+The pages now have stickers everywhere — SKU, batch number, expiry. They go to Meera, the cashier:
+
+1. For each page, walk to the candy jar
+2. Look at the printed price tag (set by mom — never asked the kid)
+3. Multiply: price × how many
+4. Write the per-page cost on the page
+5. After all pages, total them up
+6. Hand mom the grand total
+
+| Candy shop | Code |
+|---|---|
+| Meera | `compute_pricing` node |
+| Printed price tag on the jar | `Medicine.mrp` from the DB |
+| `mrp × quantity = line cost` | `unit_price × quantity = line_total` |
+| Grand total across pages | `total_amount = sum(line_totals)` |
+| Never asking the kid the price | Server-side pricing rule |
+
+### Senior-engineering rule: never trust the client for prices
+
+This is the most important security rule in any e-commerce/billing code:
+
+> **The server NEVER reads the price from the request body, the LLM, or any client-supplied source. The ONLY trustworthy price source is your own database, set by an admin.**
+
+Our LLM extraction (`ExtractedIntent`) doesn't even HAVE a `price` field — by design. The model can't accidentally include one, the user can't tamper with one. `compute_pricing` reads `medicine.mrp` from the DB, ignoring anything else.
+
+**Why this matters:**
+
+| Attack | Naive code | Our code |
+|---|---|---|
+| Attacker intercepts HTTP body, sets `price=0.01` | Server bills 0.01 — free medicines | Server ignores body, reads DB — bills full MRP |
+| Attacker tells the LLM "the price is zero" in the sentence | Extraction picks up "0", server bills 0 | LLM has no `price` field to populate, server reads DB |
+
+OWASP calls this **Business Logic Vulnerability — Insecure Pricing**. It's interview gold — recruiters love when juniors mention this unprompted.
+
+### Why `Decimal` and not `float` for money
+
+Python's `float` is binary IEEE 754. It cannot represent simple decimal numbers exactly:
+
+```python
+>>> 0.1 + 0.2
+0.30000000000000004
+```
+
+Harmless for sensor data. **Catastrophic for an invoice.** A pharmacy running 10,000 transactions/day will eventually face an auditor asking *"why is the books total ₹12,345.67999999 instead of ₹12,345.68?"*
+
+**Rule of thumb:**
+> If it touches money → `Decimal`. Convert to `float` ONLY at the boundary (state, JSON, network).
+
+### Why `Decimal(str(x))` and not `Decimal(x)` for float inputs
+
+```python
+>>> Decimal(0.1)
+Decimal('0.1000000000000000055511151231257827021181583404541015625')
+>>> Decimal(str(0.1))
+Decimal('0.1')
+```
+
+`Decimal(0.1)` reads the float's full noisy binary representation. `Decimal(str(0.1))` parses Python's readable repr `'0.1'` — exactly. ALWAYS go through `str()` when converting a float to Decimal.
+
+### Why we `.quantize()` to 2 decimal places
+
+A pharmacy's currency is rupees + paise = 2 decimal places. After every multiplication, we round to that grid:
+
+```python
+unit_price = _round_money(Decimal(str(medicine.mrp)))   # 25.00
+line_total = _round_money(unit_price * Decimal(qty))    # 50.00, never 50.000000001
+```
+
+Without `.quantize()`, repeated multiplications could grow tail digits unboundedly. Pharma audits hate trailing digits.
+
+### Cast at the state boundary (Decimal → float)
+
+```python
+return {
+    "priced_items": [..., {"unit_price": float(unit_price), "line_total": float(line_total)}],
+    "total_amount": float(total_amount),
+}
+```
+
+LangGraph state gets JSON-serialized for checkpoints/logs. `json.dumps` can't serialize `Decimal`. The cast is unavoidable. Loss of precision at this step is fine — we already rounded to paise; the float representation of e.g. `50.0` is exact.
+
+> **Same pattern as `date.isoformat()` in `select_batch`** — strong type inside the function, JSON-safe type when entering state.
+
+### State shape after this step
+
+```python
+state = {
+    "pharmacist_input": "...",
+    "extracted_intent": {...},
+    "resolved_items":   [{name, quantity, unit, medicine_id}, ...],
+    "batched_items":    [{...resolved_item, batch_id, batch_number, expiry_date}, ...],
+    "priced_items":     [{...batched_item, unit_price, line_total}, ...],   # new
+    "total_amount":     50.00,                                              # new
+    "errors":           [...],
+}
+```
+
+This is the state right before `persist_sale` (step 3.7) writes the Sale + SaleItem rows in one transaction.
+
+### 3 production mistakes this design prevents
+
+1. **Reading price from request body** — opens an Insecure-Pricing vulnerability.
+2. **Using float for math** — silent rounding errors corrupt invoices.
+3. **Passing Decimal into state** — state becomes JSON-unserializable; checkpoints break.
+
+---

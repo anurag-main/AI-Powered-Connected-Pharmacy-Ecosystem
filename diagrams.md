@@ -993,3 +993,59 @@ graph TB
 The composite index `(medicine_id, expiry_date)` makes this a single B-tree seek — fast even with millions of batch rows.
 
 ---
+
+## Phase 3 / Step 3.5 — `compute_pricing` node (Meera the cashier)
+
+### Inside one call
+
+```mermaid
+flowchart TD
+    A["state in:<br/>batched_items =<br/>[{...item, medicine_id, batch_id, expiry_date}, ...]"] --> B[open SessionLocal]
+    B --> C[total_amount = Decimal 0]
+    C --> D{for each batched_item}
+    D --> E["medicine = med_repo.get_by_id(medicine_id)<br/>(price-tag lookup — SERVER-SIDE only)"]
+    E --> F["unit_price = Decimal(str(medicine.mrp))"]
+    F --> G["line_total = unit_price × quantity<br/>quantized to 2 decimals"]
+    G --> H["priced_items.append<br/>{...item, unit_price, line_total}"]
+    H --> I["total_amount += line_total"]
+    I --> D
+    D -->|done| J["close session"]
+    J --> K["state out:<br/>priced_items: [...]<br/>total_amount: float"]
+
+    classDef start fill:#e3f0ff,stroke:#003a8c,stroke-width:2px,color:#000
+    classDef step fill:#fff5d6,stroke:#a86b00,stroke-width:2px,color:#000
+    classDef money fill:#e5fbe5,stroke:#1f7a1f,stroke-width:2px,color:#000
+    classDef sec fill:#ffe5e5,stroke:#a83333,stroke-width:2px,color:#000
+
+    class A,K start
+    class B,C,D,J step
+    class F,G,H,I money
+    class E sec
+```
+
+### The server-side pricing rule visualized
+
+```mermaid
+graph LR
+    subgraph attacker[Attacker tampers HTTP body]
+        A1["Client sent:<br/>quantity=2<br/>price=0.01 (FAKE)"]
+    end
+    subgraph naive[Naive code]
+        N1["bill = price × qty<br/>= 0.01 × 2<br/>= 0.02 ₹  (free medicine!)"]
+    end
+    subgraph ours[Our compute_pricing]
+        O1["bill = DB.mrp × qty<br/>= 25.00 × 2<br/>= 50.00 ₹  (correct)"]
+    end
+
+    A1 -.-> N1
+    A1 -.-> O1
+
+    classDef bad fill:#ffe5e5,stroke:#a83333,stroke-width:2px,color:#000
+    classDef good fill:#e5fbe5,stroke:#1f7a1f,stroke-width:2px,color:#000
+    classDef att fill:#fff5d6,stroke:#a86b00,stroke-width:2px,color:#000
+    class A1 att
+    class N1 bad
+    class O1 good
+```
+
+---
