@@ -20,9 +20,9 @@ class BillingState(TypedDict, total=False):
         INPUT                       pharmacist_input
         ↓ extract_intent (LLM)      extracted_intent
         ↓ resolve_medicine (DB)     resolved_items     ← step 3.3
-        ↓ select_batch (DB FEFO)    priced_items       ← step 3.5
-        ↓ compute_pricing           total_amount
-        ↓ persist_sale (DB tx)      sale_id
+        ↓ select_batch (DB FEFO)    batched_items      ← step 3.4
+        ↓ compute_pricing           priced_items + total_amount   ← step 3.5
+        ↓ persist_sale (DB tx)      sale_id            ← step 3.7
         OUTPUT                      sale_id + total_amount returned to caller
     """
 
@@ -41,11 +41,22 @@ class BillingState(TypedDict, total=False):
     # If a medicine couldn't be found, it's NOT in this list — it's reported in `errors`.
     resolved_items: list[dict]
 
-    # ----- Filled by select_batch + compute_pricing (step 3.5+) -----
-    # Each item gains: batch_id, unit_price, line_total.
+    # ----- Filled by select_batch — each resolved item enriched with the FEFO winner -----
+    # Has shape: [
+    #   {...resolved_item, "batch_id": 7, "batch_number": "A001", "expiry_date": "2026-02-15"},
+    #   ...
+    # ]
+    # Items with no usable batch (expired / out of stock) are NOT in this list — they're errors.
+    batched_items: list[dict]
+
+    # ----- Filled by compute_pricing — adds unit_price + line_total per item -----
+    # Has shape: [
+    #   {...batched_item, "unit_price": 25.0, "line_total": 50.0},
+    #   ...
+    # ]
     priced_items: list[dict]
 
-    # ----- Filled by compute_pricing -----
+    # ----- Filled by compute_pricing — sum of all line_total -----
     total_amount: float
 
     # ----- Filled by persist_sale — the new invoice id -----
