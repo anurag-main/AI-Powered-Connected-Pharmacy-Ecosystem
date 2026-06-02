@@ -9,7 +9,8 @@ Every node reads some fields and writes others. By declaring this as a TypedDict
 populated remain absent (vs. None). Avoids "is this field None because nothing
 set it, or None because it was deliberately set to None" ambiguity.
 """
-from typing import TypedDict
+from operator import add
+from typing import Annotated, TypedDict
 
 
 class BillingState(TypedDict, total=False):
@@ -63,4 +64,9 @@ class BillingState(TypedDict, total=False):
     sale_id: int
 
     # ----- Cross-cutting: accumulated soft errors a node can report without aborting -----
-    errors: list[str]
+    # `Annotated[..., add]` is LangGraph's REDUCER pattern. Instead of OVERWRITING the
+    # whole list when a node returns {"errors": [...]}, LangGraph CONCATENATES the new
+    # list onto the existing one (using operator.add on lists = concatenation).
+    # This means resolve_medicine's "Crocin not found" survives even when later nodes
+    # return their own (possibly empty) errors list.
+    errors: Annotated[list[str], add]
