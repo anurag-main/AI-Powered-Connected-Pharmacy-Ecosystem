@@ -1116,3 +1116,87 @@ graph LR
 ```
 
 ---
+
+## Phase 3 / Step 3.8 — The compiled billing graph (the manager)
+
+```mermaid
+flowchart LR
+    S((START)) --> E[extract_intent<br/>LLM]
+    E --> R[resolve_medicine<br/>DB lookup]
+    R --> B[select_batch<br/>FEFO]
+    B --> P[compute_pricing<br/>Decimal math]
+    P --> W[persist_sale<br/>atomic transaction]
+    W --> X((END))
+
+    classDef sentinel fill:#222,color:#fff,stroke:#000,stroke-width:2px
+    classDef llm fill:#ffe5e5,stroke:#a83333,stroke-width:2px,color:#000
+    classDef db fill:#e3f0ff,stroke:#003a8c,stroke-width:2px,color:#000
+    classDef math fill:#fff5d6,stroke:#a86b00,stroke-width:2px,color:#000
+    classDef write fill:#fce5ff,stroke:#7d2280,stroke-width:3px,color:#000
+
+    class S,X sentinel
+    class E llm
+    class R,B db
+    class P math
+    class W write
+```
+
+### State flowing between the nodes
+
+```mermaid
+graph LR
+    S0["state in:<br/>{pharmacist_input: '...'}"] --> N1[extract_intent]
+    N1 --> S1["+ extracted_intent"]
+    S1 --> N2[resolve_medicine]
+    N2 --> S2["+ resolved_items<br/>+ errors[+]"]
+    S2 --> N3[select_batch]
+    N3 --> S3["+ batched_items<br/>+ errors[+]"]
+    S3 --> N4[compute_pricing]
+    N4 --> S4["+ priced_items<br/>+ total_amount"]
+    S4 --> N5[persist_sale]
+    N5 --> S5["+ sale_id<br/>+ errors[+]"]
+
+    classDef state fill:#e5fbe5,stroke:#1f7a1f,stroke-width:2px,color:#000
+    classDef node fill:#e3f0ff,stroke:#003a8c,stroke-width:2px,color:#000
+
+    class S0,S1,S2,S3,S4,S5 state
+    class N1,N2,N3,N4,N5 node
+```
+
+`[+]` next to errors means the list is **appended to**, not overwritten — the LangGraph reducer pattern via `Annotated[list[str], operator.add]`.
+
+---
+
+## Phase 3 / Step 3.9 — HTTP layer wrapping the graph (the waiter)
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant C as Client<br/>(curl / Swagger)
+    participant R as Router<br/>POST /api/v1/billing/sale
+    participant S as BillingService
+    participant G as Compiled Graph
+    participant DB as MySQL
+
+    C->>R: POST {pharmacist_input: "2 strips Crocin for Anurag 98..."}
+    Note over R: FastAPI validates body<br/>against BillingRequest
+    R->>S: create_sale(pharmacist_input)
+    S->>G: graph.invoke({pharmacist_input})
+    Note over G: 5 nodes run<br/>(extract→resolve→batch→price→persist)
+    G->>DB: atomic write (Sale + items + stock)
+    DB-->>G: committed
+    G-->>S: final state {sale_id, priced_items, total, errors}
+    S->>S: map state → BillingResponse
+    S-->>R: BillingResponse
+    alt sale_id present
+        R-->>C: 201 Created + receipt JSON
+    else sale_id missing (no usable line)
+        R-->>C: 422 Unprocessable + errors
+    end
+```
+
+### Why the billing router does NOT use Depends(get_db)
+
+The medicine router injects a request-scoped session via `Depends(get_db)` because its repository needs one. But the billing graph's nodes EACH open their own `SessionLocal()` internally (persist_sale owns its transaction). So the billing endpoint stays session-free at the HTTP layer — the graph is self-contained. Different domains, different session-ownership patterns; both valid.
+
+---

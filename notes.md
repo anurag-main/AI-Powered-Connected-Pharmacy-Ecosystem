@@ -1095,3 +1095,150 @@ state = {
 4. **"What happens if your DB connection drops mid-transaction?"** → SQLAlchemy's `pool_pre_ping` + `pool_recycle` catch most stale connections; transaction is automatically rolled back
 
 ---
+
+## Phase 3 — Step 3.8 — Compiling the LangGraph (the manager)
+
+### Continuing the candy-shop analogy
+
+The 5 helpers (Rohit, Priya, Sanjay, Meera, Mom) each know their job but not the ORDER. Mom hires a manager with one instruction card: "When a kid walks in: Rohit → Priya → Sanjay → Meera → Mom. Pass the notebook between them." The manager does no actual work — he just calls the right helper in turn and carries the notebook (state).
+
+| Candy shop | Code |
+|---|---|
+| The manager | `StateGraph(BillingState).compile()` |
+| Instruction card | `add_node()` + `add_edge()` calls |
+| Notebook passed along | `BillingState` dict |
+| "Start"/"End" signs | `START` / `END` sentinels |
+| Opening the shop for one customer | `graph.invoke({"pharmacist_input": ...})` |
+
+### How a StateGraph is built
+
+```python
+builder = StateGraph(BillingState)        # 1. declare the state shape
+builder.add_node("extract_intent", fn)     # 2. register each node by name
+builder.add_edge(START, "extract_intent")  # 3. wire the order with edges
+...
+graph = builder.compile()                  # 4. compile into a runnable
+graph.invoke({"pharmacist_input": "..."})  # 5. run the whole pipeline
+```
+
+`add_node(name, fn)` — `fn` is any callable taking state, returning a partial-state dict. Our 5 node functions plug in directly.
+
+`add_edge(A, B)` — "after A finishes, run B." A straight chain of edges = a linear pipeline. (LangGraph also supports `add_conditional_edges` for branching — we don't need it yet.)
+
+### The reducer pattern — why `errors` is `Annotated[list[str], operator.add]`
+
+Without a reducer, when a node returns `{"errors": [...]}`, LangGraph OVERWRITES the whole `errors` field. So `resolve_medicine`'s "Crocin not found" would be wiped by a later node returning `{"errors": []}`.
+
+The fix: declare the field as `Annotated[list[str], add]`. Now LangGraph CONCATENATES (because `operator.add` on lists = `+` = concatenation) each returned errors list onto the accumulated one. Errors from every node survive to the end.
+
+This is THE key LangGraph concept: **fields can have reducers that say HOW to merge a node's output into state.** Default = overwrite. `operator.add` = append. You can write custom reducers too.
+
+### Why a linear graph (no conditional short-circuit) is fine here
+
+Every node already guards its own input (`if not X: return {"errors": [...]}`) and no-ops cleanly on bad/missing upstream data. So a failure upstream propagates as soft errors and downstream nodes degrade gracefully. Adding conditional edges to jump straight to END on the first error would be premature optimization — the guards already prevent crashes. We can add routing later if we want to skip wasted node calls.
+
+### Why `@lru_cache` on `get_billing_graph()`
+
+Compiling the graph costs a few ms. Doing it per HTTP request wastes latency. Cache it once per process — same pattern as `get_llm()`.
+
+---
+
+## Phase 3 — Provider switch: NVIDIA → OpenAI (2026-06-02)
+
+### What happened
+
+Per-node tests all passed on NVIDIA + Maverick. But running the FULL compiled graph end-to-end HUNG on NVIDIA (terminal froze, no output). Switched `LLM_PROVIDER=openai` in `.env` — graph ran instantly, wrote `sale_id`, all 5 nodes passed, `errors: []`.
+
+### The lesson — this is WHY we built the factory pattern
+
+The entire reason `app/ai/llm.py` has a `get_llm()` factory dispatching on `LLM_PROVIDER` was so that swapping providers is a ONE-LINE `.env` change with ZERO code edits. When NVIDIA misbehaved, we proved the value: changed `LLM_PROVIDER=nvidia` → `openai`, commented out the NVIDIA `AI_MODEL_NAME` override, done. Not a single node, graph, or schema file touched.
+
+**Interview gold:** "I abstracted the LLM behind a provider factory. When one provider's endpoint stalled on structured output under load, I switched providers in one config line without touching application code." That's exactly the kind of decoupling senior engineers are paid for.
+
+### The two `.env` traps we hit (BOTH providers)
+
+1. **Quoted keys break the minimal loader.** Our `_load_dotenv` does `value.strip()` — strips whitespace, NOT quotes. A key written as `OPENAI_API_KEY="sk-..."` is loaded WITH the literal quotes → 401. Store keys UNQUOTED. (Real `python-dotenv` strips quotes; ours doesn't — know your tools.)
+2. **Stale `AI_MODEL_NAME` override.** When switching to OpenAI, the leftover `AI_MODEL_NAME=meta/llama-4-maverick...` would ask OpenAI for a Meta model → 404. Comment it out so the per-provider default (`gpt-4o-mini`) applies.
+
+### gpt-4o-mini vs Maverick for structured output
+
+OpenAI has NATIVE structured output via function-calling — fast, no retry loop, no "model not known to support structured output" warning. NVIDIA's LangChain integration wraps Maverick in a `_FallbackRunnable` that can stall. For a billing pipeline that must be reliable and fast, OpenAI is the safer active choice. NVIDIA stays wired as the alternate.
+
+---
+
+## Phase 3 — Steps 3.9 + 3.10 — HTTP layer + end-to-end test (the waiter)
+
+### The 3-file HTTP layer (same shape as the Medicine domain)
+
+| File | Role | Analogy |
+|---|---|---|
+| `app/schemas/billing.py` | Input/output contract (`BillingRequest` / `BillingResponse`) | The order slip + the receipt format |
+| `app/services/billing_service.py` | Wraps `graph.invoke()`, maps state → response | The kitchen manager |
+| `app/routers/billing.py` | `POST /api/v1/billing/sale`, picks status code | The waiter at the counter |
+
+A customer never walks into the kitchen (the graph). They order through the waiter (router), who hands it to the manager (service), who runs the kitchen (graph), and brings back food + bill (response).
+
+### Why the billing router has NO Depends(get_db)
+
+The medicine router injects a request-scoped session via `Depends(get_db)` because its repository needs one per request. The billing graph's nodes EACH open their own `SessionLocal()` internally (persist_sale owns its transaction). So the billing endpoint is session-free at the HTTP layer — the graph is self-contained.
+
+Lesson: session ownership is a per-domain decision. Simple CRUD → request-scoped session injected at the router. Self-contained pipeline → the pipeline owns its sessions. Both are valid; pick by who needs the session boundary.
+
+### Why the service layer exists even though it "just calls the graph"
+
+It looks like a pass-through, but it's the seam where future cross-cutting rules land WITHOUT touching the router or the graph:
+- auth / role checks ("is this user allowed to bill?")
+- rate limiting / idempotency keys (avoid double-charging on a retried request)
+- audit logging
+- converting the graph's loose dict-state into a typed, validated `BillingResponse`
+
+Keeping the router dumb (HTTP only) and the graph pure (logic only) means the service is where "policy" lives. Same reason the Medicine domain has a service layer even for pass-through reads.
+
+### HTTP status code design
+
+| Situation | Status | Why |
+|---|---|---|
+| Sale created (sale_id present) | **201 Created** | A new resource (the invoice) was created |
+| Nothing billable (sale_id None) | **422 Unprocessable Entity** | We understood the request but couldn't act — unknown medicine, out of stock |
+| Empty / missing / oversized input | **422** (automatic) | Pydantic rejects it BEFORE the graph runs — saves a paid LLM call |
+
+422 (not 400) is the REST-correct choice for "syntactically valid JSON that fails business/validation rules." 400 is for malformed requests; 422 is for well-formed-but-unprocessable.
+
+### What the end-to-end HTTP test proved (FastAPI TestClient)
+
+`TestClient` runs the real app in-process — real router → service → graph → OpenAI → MySQL. No separate uvicorn server (which had been hanging). 4 cases, all green:
+1. Valid order → 201 + sale_id 6 + full receipt (the entire project in one HTTP call)
+2. Unknown medicine → 422; error list traces the failure cascade through all 5 nodes (graceful degradation, no crash)
+3. Empty input → 422 from Pydantic before the graph runs
+4. Missing field → 422 "Field required"
+
+### The error-cascade in Test 2 (why we see 4 errors for 1 unknown medicine)
+
+```
+"Medicine not found: 'Unicorn Dust 999mg'"          ← resolve_medicine
+"select_batch: no resolved_items to pick batches"   ← select_batch guard (nothing resolved)
+"compute_pricing: no batched_items to price"        ← compute_pricing guard (nothing batched)
+"persist_sale: no priced_items to record"           ← persist_sale guard (nothing priced)
+```
+
+This is the **collect-then-decide + error-reducer** patterns working together. Each downstream node's guard fires cleanly (no crash) and appends its own note. The `Annotated[list[str], operator.add]` reducer accumulates all four. The client gets a complete picture of why nothing was billed. In a future step we could add conditional edges to short-circuit after the first failure — but the current design is crash-proof and informative, which matters more right now.
+
+### 3 production lessons from the HTTP layer
+
+1. **Validate at the boundary (Pydantic) to fail cheap** — empty input is rejected before the paid LLM call.
+2. **Pick the semantically-correct status code** — 201 for created, 422 for unprocessable; don't lazily return 200 for everything.
+3. **Keep a service layer even for thin wrappers** — it's where auth/rate-limit/audit will land without a rewrite.
+
+### Phase 3 COMPLETE — what the system now does
+
+One HTTP POST with a plain-English order →
+extract (LLM) → resolve (DB) → FEFO batch → server-side Decimal pricing →
+atomic 4-table transaction → invoice in MySQL → typed JSON receipt.
+
+Provider-swappable (OpenAI active, NVIDIA alternate) via one `.env` line.
+Every money value exact (Decimal). Stock can't go negative (transactional
+re-check). Expired/empty batches never sold (FEFO SQL). Price never trusted
+from the client (server-side MRP lookup). Every sale auditable (frozen prices
+in sale_items).
+
+---
