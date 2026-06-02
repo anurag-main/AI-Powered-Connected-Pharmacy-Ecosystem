@@ -1049,3 +1049,70 @@ graph LR
 ```
 
 ---
+
+## Phase 3 / Step 3.7 — `persist_sale` node (Mom writing the bill)
+
+### The 4-table transaction
+
+```mermaid
+flowchart TD
+    A["state in:<br/>extracted_intent.customer_*<br/>priced_items + total_amount"] --> B["with SessionLocal() as db"]
+    B --> T["with db.begin():<br/>(opens transaction)"]
+    T --> C{phone given?}
+    C -- yes --> D["SELECT customers WHERE phone=...<br/>found?"]
+    D -- no --> E["INSERT customers<br/>db.flush() → customer.id"]
+    D -- yes --> F["use existing customer.id"]
+    C -- no --> G["customer_id = NULL"]
+    E --> H["INSERT sales (customer_id, total)<br/>db.flush() → sale.id"]
+    F --> H
+    G --> H
+    H --> I{for each priced_item}
+    I --> J["batch = db.get(Batch, batch_id)<br/>check qty sufficient"]
+    J -- ok --> K["batch.quantity -= sold_qty<br/>(UPDATE batches)"]
+    J -- insufficient --> X["raise → rollback"]
+    K --> L["INSERT sale_items"]
+    L --> I
+    I -->|done| M["db.commit()<br/>(transaction sealed)"]
+    M --> Z["state out:<br/>sale_id = N"]
+    X --> Y["state out:<br/>errors = ['persist_sale failed: ...']"]
+
+    classDef start fill:#e3f0ff,stroke:#003a8c,stroke-width:2px,color:#000
+    classDef step fill:#fff5d6,stroke:#a86b00,stroke-width:2px,color:#000
+    classDef tx fill:#fce5ff,stroke:#7d2280,stroke-width:3px,color:#000
+    classDef ok fill:#e5fbe5,stroke:#1f7a1f,stroke-width:2px,color:#000
+    classDef err fill:#ffe5e5,stroke:#a83333,stroke-width:2px,color:#000
+
+    class A,Z,Y start
+    class C,D,I,J step
+    class T,M tx
+    class E,F,G,H,K,L ok
+    class X err
+```
+
+### Why it must be one transaction — partial-write disaster scenarios
+
+```mermaid
+graph LR
+    subgraph p1[Scenario A: crash after Sale insert]
+        S1["INSERT sales ✓"] --> S2["INSERT sale_items ✗ crashed"]
+        S2 --> S3["Result: header with no lines<br/>= an empty invoice<br/>Money charged, no record of WHAT"]
+    end
+    subgraph p2[Scenario B: crash after sale_items but before batch UPDATE]
+        T1["INSERT sales ✓"] --> T2["INSERT sale_items ✓"]
+        T2 --> T3["UPDATE batches ✗ crashed"]
+        T3 --> T4["Result: sale recorded but stock NOT decremented<br/>= phantom stock<br/>Same units sold twice"]
+    end
+    subgraph p3[Our atomic transaction]
+        A1["BEGIN"] --> A2["INSERT sales"] --> A3["INSERT sale_items"] --> A4["UPDATE batches"] --> A5["COMMIT"]
+        A6["Any failure anywhere → ROLLBACK<br/>= as if nothing happened"]
+    end
+
+    classDef bad fill:#ffe5e5,stroke:#a83333,stroke-width:2px,color:#000
+    classDef good fill:#e5fbe5,stroke:#1f7a1f,stroke-width:2px,color:#000
+    classDef warn fill:#fff5d6,stroke:#a86b00,stroke-width:2px,color:#000
+    class S1,S2,T1,T2,T3 warn
+    class S3,T4 bad
+    class A1,A2,A3,A4,A5,A6 good
+```
+
+---

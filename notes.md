@@ -968,3 +968,130 @@ This is the state right before `persist_sale` (step 3.7) writes the Sale + SaleI
 3. **Passing Decimal into state** — state becomes JSON-unserializable; checkpoints break.
 
 ---
+
+## Phase 3 — Step 3.7 — `persist_sale` (Mom writing the bill — atomic)
+
+### Continuing the candy-shop analogy (final scene)
+
+Mom takes the finished notebook pages. She does FOUR things at once — together or not at all:
+1. Add the kid to the address book (if new)
+2. Open the bill log and write a new bill
+3. Copy every notebook page into the bill ledger
+4. Walk to the storeroom and subtract sold candy from the boxes
+
+If interrupted halfway → she tears up everything and the shop is unchanged. That's a **transaction**.
+
+| Candy shop | Code |
+|---|---|
+| Mom doing all 4 atomically | `with db.begin():` |
+| Address book | `customers` (find-or-create by phone) |
+| New bill | `INSERT sales` |
+| Each line on the bill ledger | `INSERT sale_items` |
+| Subtract from the box | `UPDATE batches SET quantity = quantity - X` |
+| Tearing up on interruption | `db.rollback()` (auto on exception) |
+| Signing the bill as final | `db.commit()` (auto on clean exit) |
+
+### Why this node uses ORM models DIRECTLY (not Phase 2 repositories)
+
+The Phase 2 repos commit inside each `.add()` method (cleanly designed for single-table writes). That model fails for multi-table writes because each call commits in isolation:
+
+```
+Bad (with auto-commit repos):
+  customer_repo.add(...)   ← commits
+  sale_repo.add(...)        ← commits
+  CRASH HERE
+  sale_item_repo.add(...)   ← never runs
+  batch_repo.update(...)    ← never runs
+
+Result: customer exists, sale exists, but no lines and no stock decrement.
+        Cannot be undone without manual repair scripts.
+```
+
+The fix is the **Unit of Work pattern** — the caller (this node) owns the commit boundary. We use ORM models directly inside `with db.begin():`, so only ONE commit (or one rollback) happens for the entire 4-table write.
+
+> **Senior-engineer rule:** Repositories that auto-commit are fine for single-table CRUD. Anything spanning tables needs the caller to own the transaction.
+
+### Find-or-create by phone — the natural-key pattern
+
+```python
+customer = db.scalars(
+    select(Customer).where(Customer.phone == phone)
+).first()
+if customer is None:
+    customer = Customer(phone=phone, name=name)
+    db.add(customer)
+    db.flush()  # populate customer.id WITHOUT committing
+```
+
+The UNIQUE index on `customers.phone` (added in step 3.6) makes the find side an O(log n) seek and guarantees we never end up with two customer rows for the same number.
+
+`db.flush()` is the key trick: it pushes pending INSERTs to the DB so SQL-generated IDs come back to Python, but DOES NOT commit. The same transaction still wraps everything.
+
+### `db.flush()` vs `db.commit()` — when to use which
+
+| Method | What it does | When to use |
+|---|---|---|
+| `db.flush()` | Sends pending SQL to the DB so generated columns (auto-increment IDs, server_default timestamps) come back. **Inside the same open transaction.** | When you need the auto-generated ID of a just-inserted row for a foreign key downstream. |
+| `db.commit()` | Tells the DB "make all changes since BEGIN permanent" + ends the transaction. | At the END of the unit of work. |
+| `db.rollback()` | Discards everything since BEGIN. | On error. (`with db.begin():` does this automatically on exception.) |
+
+In persist_sale we flush after Customer and after Sale (to get their IDs for FKs), then commit ONCE at the end of the `with db.begin():` block (implicit).
+
+### The defensive stock re-check INSIDE the transaction
+
+```python
+if batch.quantity < item["quantity"]:
+    raise RuntimeError("insufficient stock in batch ...")
+```
+
+`select_batch` already verified this earlier in the pipeline. So WHY re-check here? **Concurrency.**
+
+Between `select_batch` and `persist_sale`:
+- Another pharmacy terminal could have sold from the same batch
+- Stock that was 25 at `select_batch` time could be 10 by the time we get here
+
+The DB row state at THIS moment is what matters. The re-check inside `with db.begin():` is the **race-condition guard**. If it fails, the transaction rolls back cleanly and the user sees a graceful error instead of a corrupted invoice.
+
+This is the **read-modify-write race** — one of the canonical concurrency bugs in any web app. The simplest fix (the one we use) is: check + update inside one transaction. A more advanced fix is row-level locking via `SELECT ... FOR UPDATE`. We're skipping that until / unless we see real contention.
+
+### Atomic-or-nothing — what step 3.7 Test 3 actually proved
+
+We deliberately asked the node to sell 999,999 strips when only 23 exist. The node:
+1. Found the customer (existed from Test 1)
+2. Inserted a new Sale header row
+3. Entered the loop — got to the stock check on the first (and only) item → raised
+4. `with db.begin():` caught the exception and rolled back EVERYTHING — the sales INSERT, the not-yet-applied batch UPDATE — all gone
+
+We verified by reading `batch.quantity` after the test: still 23 (same as before Test 3). **If the transaction wasn't truly atomic, the sale row would have remained in the DB and possibly the customer too.** It didn't. The DB is exactly as it was before Test 3 started.
+
+### 3 production mistakes this design avoids
+
+1. **Multi-table writes without a single commit boundary** — partial-write corruption that can't be undone safely.
+2. **Trusting an upstream stock check** — concurrency can invalidate it; always re-verify inside the transaction.
+3. **`.commit()` per row in the loop** — turns one atomic write into N independent commits; any failure leaves partial state.
+
+### State after this step (= the final state of the billing graph)
+
+```python
+state = {
+    "pharmacist_input": "...",
+    "extracted_intent": {...},
+    "resolved_items":   [...],
+    "batched_items":    [...],
+    "priced_items":     [...],
+    "total_amount":     50.00,
+    "sale_id":          42,        # ← new (persistent invoice ID)
+    "errors":           [],
+}
+```
+
+`sale_id` is the new invoice ID. The pharmacist UI shows *"Invoice #42 created, total ₹50.00"*.
+
+### Interview talking points unlocked
+
+1. **"How do you guarantee atomicity across 4 tables?"** → `with db.begin():` (Unit of Work) + ORM models directly, not auto-commit repos
+2. **"Why re-check stock inside the transaction if select_batch already did?"** → concurrency race protection
+3. **"Why is `db.flush()` different from `db.commit()`?"** → flush ships SQL for ID generation; commit ends the transaction
+4. **"What happens if your DB connection drops mid-transaction?"** → SQLAlchemy's `pool_pre_ping` + `pool_recycle` catch most stale connections; transaction is automatically rolled back
+
+---
