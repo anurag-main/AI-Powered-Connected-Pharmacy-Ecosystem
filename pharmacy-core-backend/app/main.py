@@ -5,6 +5,7 @@ Run locally with:  uvicorn app.main:app --reload
 """
 from fastapi import FastAPI
 
+from app.routers import billing as billing_router
 from app.routers import medicines as medicines_router
 
 app = FastAPI(
@@ -22,3 +23,4 @@ def health_check():
 # Register every domain router here. As we add customers, sales, batches, etc.,
 # each gets its own file under app/routers/ and is included on one line below.
 app.include_router(medicines_router.router)
+app.include_router(billing_router.router)
