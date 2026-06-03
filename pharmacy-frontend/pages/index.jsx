@@ -8,10 +8,11 @@ import { Label } from "@/components/ui/label";
 import Icon from "@/components/ui/icon";
 import VoiceButton from "@/components/VoiceButton";
 import BillTable from "@/components/BillTable";
+import ConfirmSuggestions from "@/components/ConfirmSuggestions";
 import NotFoundWarnings from "@/components/NotFoundWarnings";
 import Receipt from "@/components/Receipt";
 import { useSpeechRecognition } from "@/lib/useSpeechRecognition";
-import { quoteSale, confirmSale } from "@/lib/api";
+import { quoteSale, confirmSale, priceItem } from "@/lib/api";
 
 function NewBillPage() {
     const { supported, listening, transcript, setTranscript, start, stop } =
@@ -37,7 +38,8 @@ function NewBillPage() {
                 setBanner({ kind: "error", text: "Could not price the order. Is the backend running?" });
                 return;
             }
-            setItems(data.items || []);
+            // Tag each row with a stable id so confirmed/pending can be filtered cleanly.
+            setItems((data.items || []).map((it, idx) => ({ ...it, _id: idx })));
             setErrors(data.errors || []);
             if ((data.items || []).length === 0) {
                 setBanner({ kind: "error", text: "No medicines matched. Check the spelling and try again." });
@@ -49,18 +51,46 @@ function NewBillPage() {
         }
     }
 
-    const handleQtyChange = (i, qty) =>
-        setItems((prev) => prev.map((it, idx) => (idx === i ? { ...it, quantity: qty } : it)));
+    // Confirmed rows go on the bill; uncertain ones wait in the confirm section.
+    const billed = items.filter((it) => !it.needs_confirm);
+    const pending = items.filter((it) => it.needs_confirm);
 
-    const handleRemove = (i) => setItems((prev) => prev.filter((_, idx) => idx !== i));
+    const handleQtyChange = (id, qty) =>
+        setItems((prev) => prev.map((it) => (it._id === id ? { ...it, quantity: qty } : it)));
+
+    const handleRemove = (id) => setItems((prev) => prev.filter((it) => it._id !== id));
+
+    // Confirm-section actions
+    const handleAccept = (id) =>
+        setItems((prev) => prev.map((it) => (it._id === id ? { ...it, needs_confirm: false } : it)));
+
+    const handleDismiss = (id) => setItems((prev) => prev.filter((it) => it._id !== id));
+
+    async function handlePickCandidate(id, candidate) {
+        const row = items.find((it) => it._id === id);
+        if (!row) return;
+        // Reprice for the newly chosen medicine (server fetches batch + MRP).
+        const { ok, data } = await priceItem(candidate.medicine_id, row.quantity, candidate.name, row.unit);
+        if (!ok) {
+            setBanner({ kind: "error", text: `${candidate.name} is out of stock.` });
+            return;
+        }
+        setItems((prev) =>
+            prev.map((it) =>
+                it._id === id
+                    ? { ...it, ...data, _id: id, needs_confirm: true, matched_from: row.matched_from, candidates: row.candidates }
+                    : it
+            )
+        );
+    }
 
     // ── Print Bill: reviewed rows -> /confirm -> persist -> print ───────────
     async function handlePrintBill() {
-        if (items.length === 0) return;
+        if (billed.length === 0) return;
         setConfirming(true);
         setBanner(null);
         try {
-            const confirmItems = items.map((it) => ({
+            const confirmItems = billed.map((it) => ({
                 name: it.name,
                 quantity: it.quantity,
                 unit: it.unit,
@@ -150,6 +180,16 @@ function NewBillPage() {
                 </CardContent>
             </Card>
 
+            {/* Confirm uncertain voice matches before they hit the bill */}
+            <div className="no-print">
+                <ConfirmSuggestions
+                    items={pending}
+                    onPick={handlePickCandidate}
+                    onAccept={handleAccept}
+                    onDismiss={handleDismiss}
+                />
+            </div>
+
             {/* Warnings */}
             <div className="no-print">
                 <NotFoundWarnings errors={errors} />
@@ -157,11 +197,11 @@ function NewBillPage() {
 
             {/* Bill table */}
             <div className="no-print">
-                <BillTable items={items} onQtyChange={handleQtyChange} onRemove={handleRemove} />
+                <BillTable items={billed} onQtyChange={handleQtyChange} onRemove={handleRemove} />
             </div>
 
             {/* Customer (optional) + Print */}
-            {items.length > 0 && (
+            {billed.length > 0 && (
                 <Card className="no-print">
                     <CardContent className="space-y-4">
                         <div className="grid sm:grid-cols-2 gap-4">

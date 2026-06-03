@@ -31,6 +31,16 @@ export async function confirmSale(items, customerName, customerPhone) {
     });
 }
 
+/** Price one medicine by id (used when the owner switches a confirm-row candidate). */
+export async function priceItem(medicineId, quantity, name, unit) {
+    return postJSON("/api/v1/billing/price-item", {
+        medicine_id: medicineId,
+        quantity,
+        name,
+        unit,
+    });
+}
+
 /** List the medicine catalog (for the Medicines page). */
 export async function listMedicines() {
     const res = await fetch(`${BASE}/api/v1/medicines`);

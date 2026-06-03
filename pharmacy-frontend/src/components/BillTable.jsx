@@ -41,8 +41,8 @@ export default function BillTable({ items = [], onQtyChange, onRemove }) {
                         </tr>
                     </thead>
                     <tbody>
-                        {items.map((it, i) => (
-                            <tr key={`${it.medicine_id}-${it.batch_id}-${i}`} className="border-b border-border/60 last:border-0">
+                        {items.map((it) => (
+                            <tr key={it._id} className="border-b border-border/60 last:border-0">
                                 <td className="px-4 py-3">
                                     <div className="font-medium text-foreground">{it.name}</div>
                                     <div className="text-xs text-muted-foreground">{it.unit}</div>
@@ -57,7 +57,7 @@ export default function BillTable({ items = [], onQtyChange, onRemove }) {
                                         type="number"
                                         min={1}
                                         value={it.quantity}
-                                        onChange={(e) => onQtyChange(i, Math.max(1, parseInt(e.target.value || "1", 10)))}
+                                        onChange={(e) => onQtyChange(it._id, Math.max(1, parseInt(e.target.value || "1", 10)))}
                                         className="h-8 text-center"
                                     />
                                 </td>
@@ -69,7 +69,7 @@ export default function BillTable({ items = [], onQtyChange, onRemove }) {
                                         type="button"
                                         variant="ghost"
                                         size="icon-sm"
-                                        onClick={() => onRemove(i)}
+                                        onClick={() => onRemove(it._id)}
                                         aria-label="Remove row"
                                         className="text-muted-foreground hover:text-rose-600 hover:bg-rose-500/10"
                                     >
