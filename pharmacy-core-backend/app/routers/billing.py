@@ -14,7 +14,11 @@ Status decisions:
 """
 from fastapi import APIRouter, Depends, HTTPException, status
 
-from app.schemas.billing import BillingRequest, BillingResponse
+from app.schemas.billing import (
+    BillingRequest,
+    BillingResponse,
+    ConfirmSaleRequest,
+)
 from app.services.billing_service import BillingService
 
 
@@ -53,6 +57,61 @@ def create_sale(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail={
                 "message": "No sale could be created",
+                "errors": result.errors,
+            },
+        )
+
+    return result
+
+
+@router.post(
+    "/quote",
+    response_model=BillingResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Preview prices for a free-text order WITHOUT saving",
+)
+def quote_sale(
+    payload: BillingRequest,
+    service: BillingService = Depends(get_billing_service),
+) -> BillingResponse:
+    """Price an order for preview — does NOT write a sale or touch stock.
+
+    Always returns 200 (it's a preview, not a creation). `sale_id` is null,
+    `items` holds the priced rows the owner can review/edit, and `errors` lists
+    any names the catalog didn't match so the UI can prompt a fix + re-quote.
+    """
+    return service.quote_sale(payload.pharmacist_input)
+
+
+@router.post(
+    "/confirm",
+    response_model=BillingResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Finalize a reviewed bill — persists the sale (the Print action)",
+)
+def confirm_sale(
+    payload: ConfirmSaleRequest,
+    service: BillingService = Depends(get_billing_service),
+) -> BillingResponse:
+    """Persist the owner-reviewed line items as a real sale.
+
+    Re-fetches each MRP from the DB and recomputes prices server-side (a tampered
+    client price is ignored), then writes the atomic 4-table transaction.
+
+    Returns 201 with the receipt (incl. sale_id) on success, or 422 if nothing
+    could be persisted (e.g. stock ran out since the quote).
+    """
+    result = service.confirm_sale(
+        items=payload.items,
+        customer_name=payload.customer_name,
+        customer_phone=payload.customer_phone,
+    )
+
+    if result.sale_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "message": "Sale could not be finalized",
                 "errors": result.errors,
             },
         )

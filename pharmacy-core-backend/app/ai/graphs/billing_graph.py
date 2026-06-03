@@ -67,6 +67,63 @@ def get_billing_graph():
     return builder.compile()
 
 
+@lru_cache(maxsize=1)
+def get_quote_graph():
+    """PREVIEW graph — same nodes as the sale graph but STOPS before persist.
+
+    Wiring: START -> extract_intent -> resolve_medicine -> select_batch
+            -> compute_pricing -> END
+
+    Used by POST /quote. Produces priced line items + total WITHOUT writing any
+    Sale/SaleItem rows or decrementing stock. The owner reviews/edits this preview,
+    then 'Print Bill' calls the confirm graph to actually persist.
+
+    Reuses the exact same node functions — only the wiring differs. This is the
+    payoff of pure state-in/state-out nodes.
+    """
+    builder = StateGraph(BillingState)
+
+    builder.add_node("extract_intent", extract_intent)
+    builder.add_node("resolve_medicine", resolve_medicine)
+    builder.add_node("select_batch", select_batch)
+    builder.add_node("compute_pricing", compute_pricing)
+
+    builder.add_edge(START, "extract_intent")
+    builder.add_edge("extract_intent", "resolve_medicine")
+    builder.add_edge("resolve_medicine", "select_batch")
+    builder.add_edge("select_batch", "compute_pricing")
+    builder.add_edge("compute_pricing", END)  # <-- no persist_sale
+
+    return builder.compile()
+
+
+@lru_cache(maxsize=1)
+def get_confirm_graph():
+    """FINALIZE graph — no LLM. Reprices owner-reviewed items, then persists.
+
+    Wiring: START -> compute_pricing -> persist_sale -> END
+
+    Used by POST /confirm. The caller supplies already-resolved line items
+    (medicine_id, batch_id, quantity, ...) as `batched_items` in the initial
+    state. compute_pricing RE-FETCHES the MRP from the DB (so the client can
+    never tamper with the price), then persist_sale writes the atomic sale.
+
+    No extract_intent / resolve_medicine here: the medicines were already
+    identified during the quote step, so we skip the LLM and DB lookups and
+    go straight to authoritative pricing + persistence.
+    """
+    builder = StateGraph(BillingState)
+
+    builder.add_node("compute_pricing", compute_pricing)
+    builder.add_node("persist_sale", persist_sale)
+
+    builder.add_edge(START, "compute_pricing")
+    builder.add_edge("compute_pricing", "persist_sale")
+    builder.add_edge("persist_sale", END)
+
+    return builder.compile()
+
+
 # ============================================================================
 # End-to-end smoke test — the WHOLE pipeline in one shot.
 #
