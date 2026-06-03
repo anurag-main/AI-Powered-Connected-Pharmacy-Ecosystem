@@ -1200,3 +1200,265 @@ sequenceDiagram
 The medicine router injects a request-scoped session via `Depends(get_db)` because its repository needs one. But the billing graph's nodes EACH open their own `SessionLocal()` internally (persist_sale owns its transaction). So the billing endpoint stays session-free at the HTTP layer — the graph is self-contained. Different domains, different session-ownership patterns; both valid.
 
 ---
+
+## Phase 3 — FULL END-TO-END WORKING DIAGRAM (request to response)
+
+> The complete journey of one HTTP call: `POST /api/v1/billing/sale` with a plain-English
+> order, through every module, to a written invoice and JSON receipt. Three views.
+
+---
+
+### VIEW 1 — Module & import map (the static wiring)
+
+Who imports whom. Solid arrow = "imports / calls into". Grouped by architectural layer.
+
+```mermaid
+graph TD
+    subgraph ext[External services]
+        OAI[OpenAI API<br/>gpt-4o-mini]
+        SQL[(MySQL 8<br/>pharmacy_dev)]
+        ENV[.env<br/>secrets + config]
+    end
+
+    subgraph http[HTTP layer]
+        MAIN[main.py<br/>FastAPI app]
+        ROUT[routers/billing.py<br/>POST /billing/sale]
+        SCHEMA[schemas/billing.py<br/>BillingRequest<br/>BillingResponse]
+    end
+
+    subgraph svc[Service layer]
+        SVC[services/billing_service.py<br/>BillingService.create_sale]
+    end
+
+    subgraph graphlyr[Graph layer]
+        GRAPH[graphs/billing_graph.py<br/>get_billing_graph]
+        STATE[state/billing_state.py<br/>BillingState TypedDict]
+    end
+
+    subgraph nodes[Node layer — 5 nodes]
+        N1[nodes/extract_intent.py]
+        N2[nodes/resolve_medicine.py]
+        N3[nodes/select_batch.py]
+        N4[nodes/compute_pricing.py]
+        N5[nodes/persist_sale.py]
+    end
+
+    subgraph aiinfra[AI infrastructure]
+        LLM[ai/llm.py<br/>get_llm factory]
+        CFG[ai/config.py<br/>LLM_PROVIDER MODEL_NAME]
+        PROMPT[prompts/billing_prompts.py<br/>EXTRACT_INTENT_..._V1]
+        EISCHEMA[schemas/extracted_intent.py<br/>ExtractedIntent]
+    end
+
+    subgraph data[Data layer]
+        DB[core/database.py<br/>SessionLocal engine Base]
+        MEDREPO[repositories/<br/>sqlalchemy_medicine_repository]
+        BATREPO[repositories/<br/>sqlalchemy_batch_repository]
+        MODELS[models/<br/>Medicine Batch Customer<br/>Sale SaleItem]
+    end
+
+    MAIN --> ROUT
+    ROUT --> SCHEMA
+    ROUT --> SVC
+    SVC --> SCHEMA
+    SVC --> GRAPH
+    SVC --> STATE
+    GRAPH --> STATE
+    GRAPH --> N1 & N2 & N3 & N4 & N5
+
+    N1 --> LLM
+    N1 --> PROMPT
+    N1 --> EISCHEMA
+    LLM --> CFG
+    CFG --> ENV
+    LLM --> OAI
+
+    N2 --> DB
+    N2 --> MEDREPO
+    N3 --> DB
+    N3 --> BATREPO
+    N4 --> DB
+    N4 --> MEDREPO
+    N5 --> DB
+    N5 --> MODELS
+
+    MEDREPO --> MODELS
+    BATREPO --> MODELS
+    DB --> ENV
+    DB --> SQL
+    MODELS --> DB
+
+    classDef ext fill:#ffe5e5,stroke:#a83333,stroke-width:2px,color:#000
+    classDef http fill:#bbdefb,stroke:#0d47a1,stroke-width:2px,color:#000
+    classDef svc fill:#c8e6c9,stroke:#1b5e20,stroke-width:2px,color:#000
+    classDef graphlyr fill:#fce5ff,stroke:#7d2280,stroke-width:2px,color:#000
+    classDef nodes fill:#fff9c4,stroke:#f57f17,stroke-width:2px,color:#000
+    classDef aiinfra fill:#ffe082,stroke:#e65100,stroke-width:2px,color:#000
+    classDef data fill:#e0e0e0,stroke:#424242,stroke-width:2px,color:#000
+
+    class OAI,SQL,ENV ext
+    class MAIN,ROUT,SCHEMA http
+    class SVC svc
+    class GRAPH,STATE graphlyr
+    class N1,N2,N3,N4,N5 nodes
+    class LLM,CFG,PROMPT,EISCHEMA aiinfra
+    class DB,MEDREPO,BATREPO,MODELS data
+```
+
+---
+
+### VIEW 2 — Request → Response sequence (the live working flow)
+
+Every actor in one call. `Note over` boxes show the BillingState contents after each node.
+Coloured boxes group the architectural layers.
+
+```mermaid
+sequenceDiagram
+    autonumber
+
+    box rgb(187,222,251) HTTP layer
+    participant C as Client
+    participant R as Router<br/>billing.py
+    participant SC as Schemas<br/>billing.py
+    end
+    box rgb(200,230,201) Service
+    participant SV as BillingService
+    end
+    box rgb(252,229,255) Graph
+    participant G as Graph<br/>billing_graph.py
+    end
+    box rgb(255,249,196) Nodes
+    participant N1 as extract_intent
+    participant N2 as resolve_medicine
+    participant N3 as select_batch
+    participant N4 as compute_pricing
+    participant N5 as persist_sale
+    end
+    box rgb(255,229,229) External
+    participant LLM as get_llm + OpenAI
+    participant DB as SessionLocal + repos
+    participant SQL as MySQL
+    end
+
+    C->>R: POST /api/v1/billing/sale<br/>{"pharmacist_input": "1 strip Crocin 500mg for Anurag 9876543210"}
+    R->>SC: validate body
+    Note over SC: BillingRequest<br/>min_length 1, max_length 1000<br/>fail → 422 (no LLM call)
+    SC-->>R: valid BillingRequest
+    R->>SV: create_sale(pharmacist_input)
+    SV->>G: graph.invoke({pharmacist_input})
+    Note over G: state = {pharmacist_input}
+
+    G->>N1: extract_intent(state)
+    N1->>LLM: get_llm().with_structured_output(ExtractedIntent)<br/>.invoke([System(prompt), Human(input)])
+    LLM-->>N1: ExtractedIntent(items, customer_name, phone)
+    N1-->>G: {"extracted_intent": {...}}
+    Note over G: + extracted_intent
+
+    G->>N2: resolve_medicine(state)
+    N2->>DB: find_by_normalized_name("crocin 500mg")
+    DB->>SQL: SELECT * FROM medicines WHERE normalized_name=?
+    SQL-->>DB: row id=5
+    DB-->>N2: MedicineOut
+    N2-->>G: {"resolved_items":[{...,medicine_id:5}], "errors":[]}
+    Note over G: + resolved_items
+
+    G->>N3: select_batch(state)
+    N3->>DB: select_fefo(medicine_id=5)
+    DB->>SQL: SELECT * FROM batches WHERE medicine_id=5<br/>AND quantity>0 AND expiry>CURDATE()<br/>ORDER BY expiry ASC LIMIT 1
+    SQL-->>DB: batch id=6 SEED-EARLY
+    DB-->>N3: BatchOut (qty ok)
+    N3-->>G: {"batched_items":[{...,batch_id:6,expiry}], "errors":[]}
+    Note over G: + batched_items
+
+    G->>N4: compute_pricing(state)
+    N4->>DB: get_by_id(5)
+    DB->>SQL: SELECT * FROM medicines WHERE id=5
+    SQL-->>DB: row mrp=25.50
+    DB-->>N4: MedicineOut
+    Note over N4: Decimal(str(mrp)) × qty<br/>= line_total, rounded to paise
+    N4-->>G: {"priced_items":[{...,unit_price,line_total}], "total_amount":25.5}
+    Note over G: + priced_items + total_amount
+
+    G->>N5: persist_sale(state)
+    N5->>DB: with db.begin()  (ONE transaction)
+    DB->>SQL: SELECT customer WHERE phone=? → INSERT if new
+    DB->>SQL: INSERT sales (customer_id, total)
+    DB->>SQL: INSERT sale_items (frozen unit_price, line_total)
+    DB->>SQL: UPDATE batches SET quantity = quantity - 1
+    SQL-->>DB: COMMIT (all-or-nothing)
+    DB-->>N5: sale.id = 6
+    N5-->>G: {"sale_id":6, "errors":[]}
+    Note over G: + sale_id (final state)
+
+    G-->>SV: final BillingState
+    SV->>SC: map state → BillingResponse
+    Note over SV: priced_items → BillingLineItem[]<br/>+ sale_id, total, customer, errors
+    SV-->>R: BillingResponse
+    alt sale_id present
+        R-->>C: 201 Created + receipt JSON
+    else sale_id is None
+        R-->>C: 422 Unprocessable + errors
+    end
+```
+
+---
+
+### VIEW 3 — State object lifecycle (what each node adds)
+
+`BillingState` is the single dict threaded through every node. Each node only ADDS its own
+keys (single-writer). `errors` is special — it ACCUMULATES via the `operator.add` reducer.
+
+```mermaid
+graph LR
+    S0["{pharmacist_input}"]
+    S1["+ extracted_intent<br/>{items, customer_name, customer_phone}"]
+    S2["+ resolved_items<br/>[{...item, medicine_id}]"]
+    S3["+ batched_items<br/>[{...item, batch_id, batch_number, expiry_date}]"]
+    S4["+ priced_items + total_amount<br/>[{...item, unit_price, line_total}]"]
+    S5["+ sale_id<br/>(persistent invoice id)"]
+
+    S0 -->|extract_intent| S1
+    S1 -->|resolve_medicine| S2
+    S2 -->|select_batch| S3
+    S3 -->|compute_pricing| S4
+    S4 -->|persist_sale| S5
+
+    ERR["errors: Annotated[list, operator.add]<br/>every node may append;<br/>list ACCUMULATES, never overwritten"]
+    S1 -.-> ERR
+    S2 -.-> ERR
+    S3 -.-> ERR
+    S4 -.-> ERR
+    S5 -.-> ERR
+
+    classDef state fill:#e5fbe5,stroke:#1f7a1f,stroke-width:2px,color:#000
+    classDef err fill:#ffe5e5,stroke:#a83333,stroke-width:2px,color:#000
+    class S0,S1,S2,S3,S4,S5 state
+    class ERR err
+```
+
+---
+
+### Input / Output reference (the two contracts)
+
+**INPUT — `BillingRequest`** (what the client POSTs):
+```json
+{ "pharmacist_input": "1 strip Crocin 500mg for Anurag 9876543210" }
+```
+
+**OUTPUT — `BillingResponse`** (201 on success):
+```json
+{
+  "sale_id": 6,
+  "total_amount": 25.5,
+  "customer_name": "Anurag",
+  "customer_phone": "9876543210",
+  "items": [
+    { "name": "Crocin 500mg", "quantity": 1, "unit": "strip",
+      "medicine_id": 5, "batch_id": 6, "batch_number": "SEED-EARLY",
+      "expiry_date": "2026-08-30", "unit_price": 25.5, "line_total": 25.5 }
+  ],
+  "errors": []
+}
+```
+
+**OUTPUT — 422** (nothing billable): `detail.errors` lists the failure cascade through the nodes.

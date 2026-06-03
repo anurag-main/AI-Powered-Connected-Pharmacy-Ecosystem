@@ -1242,3 +1242,82 @@ from the client (server-side MRP lookup). Every sale auditable (frozen prices
 in sale_items).
 
 ---
+
+## Frontend — Voice Billing UI (Next.js) — built 2026-06-03
+
+We pulled the frontend forward (before Docker) to build the owner's #1 ask: speak
+an order → bill table fills with prices → review → print. UI shell was copied from
+`C:\ReimbursementProject` so it looks identical (sidebar, buttons, theme).
+
+### The two-call frontend flow (preview → finalize)
+
+The original `/sale` endpoint saved immediately — wrong for "review then print". So
+we split it:
+
+1. **Get Prices** → `POST /quote` → prices the order but saves NOTHING (sale_id null).
+   The owner sees an editable table.
+2. **Print Bill** → `POST /confirm` → saves the reviewed rows by ID, then prints.
+
+| Restaurant analogy | Code |
+|---|---|
+| Waiter reads the menu prices to you (nothing ordered yet) | `/quote` |
+| You finalize and the kitchen cooks + prints the bill | `/confirm` |
+
+### Reusing the 5 nodes in 3 graphs (the payoff of pure nodes)
+
+Because each LangGraph node is pure (state in → partial state out), we rewired the
+SAME node functions into three graphs without rewriting any node:
+- `/sale`    = extract → resolve → batch → price → persist
+- `/quote`   = extract → resolve → batch → price        (drop persist)
+- `/confirm` = price → persist                          (drop the LLM entirely)
+
+`/confirm` skips the LLM because the medicines were already identified during the
+quote; it just reprices by ID and saves. **This is why we kept nodes pure** — months
+later, new flows are just new wiring.
+
+### Server-side reprice at confirm (security)
+
+`ConfirmLineItem` has NO price field. `/confirm` re-fetches each MRP from the DB and
+recomputes the total. So even if the browser sent a tampered price, it's ignored.
+Same "never trust the client for money" rule as compute_pricing — enforced again at
+the finalize boundary. Smoke test proved quote total == confirm total (both from DB).
+
+### Browser Web Speech API (free voice, no backend)
+
+`useSpeechRecognition` wraps `window.SpeechRecognition`. The browser does the speech-
+to-text locally and free — no audio upload, no Whisper bill. Trade-off: Chrome/Edge
+only, English-focused. Firefox/Safari → `supported=false` → the UI falls back to a
+typing textarea. Whisper (Marathi/Hindi) is the future upgrade; since the backend only
+needs TEXT, swapping the text source later changes nothing downstream.
+
+### CORS — why the browser needed a guest list
+
+Frontend (`:3000`/`:3001`) and backend (`:8000`) are different origins. Browsers block
+cross-origin fetches unless the server's `CORSMiddleware` whitelists the frontend
+origin. Added both 3000 and 3001 (Next falls back to 3001 when 3000 is taken).
+
+### Print = `window.print()` + `@media print`
+
+No PDF library. The Receipt has `id="print-receipt"`; globals.css `@media print` hides
+everything EXCEPT `#print-receipt`, so the browser print dialog shows just a clean
+receipt (printable to paper or "Save as PDF"). `.no-print` hides UI chrome.
+
+### 3 beginner mistakes this avoided
+
+1. **Saving on voice instead of on print** — would commit mis-heard medicines + decrement
+   stock before the owner could fix anything. The quote/confirm split fixes this.
+2. **Trusting the client's price/total at confirm** — classic tampering hole; we reprice from DB.
+3. **Forgetting CORS** — the API works in Swagger but every browser fetch fails with a
+   confusing "blocked by CORS policy" until the middleware whitelists the frontend origin.
+
+### How to run the whole thing (PowerShell, two terminals)
+```
+# Terminal 1 — backend
+cd pharmacy-core-backend; .\venv\Scripts\Activate.ps1; uvicorn app.main:app --reload
+python -m scripts.seed_catalog        # once, so spoken medicines exist
+
+# Terminal 2 — frontend
+cd pharmacy-frontend; npm run dev      # http://localhost:3000 (or 3001)
+```
+
+---
