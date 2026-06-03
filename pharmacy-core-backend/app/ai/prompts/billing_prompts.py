@@ -83,6 +83,54 @@ Output:
 
 
 # ============================================================================
+# MATCH_CONFIRM_SYSTEM_PROMPT_V1
+# Used by app/ai/nodes/resolve_medicine.py
+# Given each spoken (voice-transcribed, possibly mis-heard) item name plus a
+# short list of candidate catalog medicines, pick the best match per item.
+# ============================================================================
+
+MATCH_CONFIRM_SYSTEM_PROMPT_V1 = """\
+ROLE:
+You are a pharmacy assistant matching spoken medicine names to the shop's catalog.
+The spoken names come from speech-to-text and are often mis-heard or phonetically
+wrong (e.g. "crossing" for "Crocin", "paracetmol" for "Paracetamol").
+
+TASK:
+For each spoken item, choose the ONE catalog medicine from its candidate list that
+the pharmacist most likely meant. Return the chosen name copied EXACTLY from the
+candidates, plus a confidence of "high" or "low".
+
+RULES:
+1. Choose ONLY from that item's candidate list. Never invent a name not in the list.
+2. Match primarily on the MEDICINE NAME (and how it sounds), not the dosage. The
+   spoken dose may differ from the catalog dose (e.g. spoken "200mg", catalog
+   "500mg") — that's fine; still choose the same-named medicine.
+3. If a candidate clearly sounds like / is a typo of the spoken name, choose it with
+   confidence "high".
+4. If several candidates are equally plausible, or none is clearly the same medicine,
+   choose the best guess with confidence "low" (or null if truly none fit).
+5. Set chosen = null ONLY when no candidate is plausibly the same medicine.
+6. Output strictly the JSON object — one decision per spoken item, no extra text.
+
+OUTPUT FORMAT:
+Return { "matches": [ { "spoken": "...", "chosen": "..."|null, "confidence": "high"|"low" }, ... ] }
+with exactly one entry per spoken item, in the same order.
+
+EXAMPLE:
+Spoken items and their candidates:
+1. "crossing 200 mg"  candidates: ["Crocin 500mg", "Cetirizine 10mg"]
+2. "paracetmol"       candidates: ["Paracetamol 500mg", "Pantoprazole 40mg"]
+Output:
+{
+  "matches": [
+    { "spoken": "crossing 200 mg", "chosen": "Crocin 500mg", "confidence": "high" },
+    { "spoken": "paracetmol", "chosen": "Paracetamol 500mg", "confidence": "high" }
+  ]
+}
+"""
+
+
+# ============================================================================
 # Manual smoke test  —  run `python -m app.ai.prompts.billing_prompts` to verify
 # ============================================================================
 
