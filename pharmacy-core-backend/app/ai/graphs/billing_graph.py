@@ -98,6 +98,29 @@ def get_quote_graph():
 
 
 @lru_cache(maxsize=1)
+def get_price_graph():
+    """PRICE-ONE graph — no LLM, no persist. Prices already-resolved items.
+
+    Wiring: START -> select_batch -> compute_pricing -> END
+
+    Used by POST /price-item when the owner picks a different medicine from a
+    confirm dropdown: we feed `resolved_items` (medicine_id + quantity) and get
+    back the FEFO batch + server-computed price for that medicine. Reuses the
+    same two nodes — only the wiring differs.
+    """
+    builder = StateGraph(BillingState)
+
+    builder.add_node("select_batch", select_batch)
+    builder.add_node("compute_pricing", compute_pricing)
+
+    builder.add_edge(START, "select_batch")
+    builder.add_edge("select_batch", "compute_pricing")
+    builder.add_edge("compute_pricing", END)
+
+    return builder.compile()
+
+
+@lru_cache(maxsize=1)
 def get_confirm_graph():
     """FINALIZE graph — no LLM. Reprices owner-reviewed items, then persists.
 

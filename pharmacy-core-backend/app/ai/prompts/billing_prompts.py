@@ -39,6 +39,7 @@ RULES:
 8. Create a separate item entry for every medicine mentioned.
 9. unit must be one of: strip, bottle, tablet, ml, tube, sachet. If unclear or not mentioned, output "strip".
 10. When a phone number is mentioned, extract digits only — strip spaces, dashes, and country codes (e.g. "+91 98765-43210" becomes "9876543210"). Output as a 10-digit string.
+11. The text comes from speech-to-text and may contain mis-heard medicine names ("mat CB", "crossing", "wool"). Capture EVERY "quantity + name" phrase as an item, even when the name sounds unclear — write the name exactly as spoken. Do NOT silently drop a mentioned item; it will be checked against the catalog later. Only ignore obvious filler ("and", "also", "please") that has no quantity/medicine.
 
 OUTPUT FORMAT:
 Return a single JSON object containing the keys items, customer_name, and customer_phone. Do not include markdown, explanations, comments, or any text outside the JSON object.

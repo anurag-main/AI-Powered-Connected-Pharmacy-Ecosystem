@@ -26,6 +26,13 @@ class BillingRequest(BaseModel):
     )
 
 
+class MatchCandidate(BaseModel):
+    """A possible catalog medicine for an uncertain (voice-mis-heard) line."""
+
+    medicine_id: int
+    name: str
+
+
 class BillingLineItem(BaseModel):
     """One line on the returned receipt — mirrors a priced_item from graph state."""
 
@@ -38,6 +45,14 @@ class BillingLineItem(BaseModel):
     expiry_date: str
     unit_price: float
     line_total: float
+
+    # ----- Voice-match metadata (defaults keep older callers working) -----
+    # True when the match was uncertain and the owner should confirm before billing.
+    needs_confirm: bool = False
+    # The raw spoken text we matched FROM (e.g. "mat CB"), for "did you hear this right?".
+    matched_from: str | None = None
+    # Alternative catalog medicines the owner can switch to (dropdown).
+    candidates: list[MatchCandidate] = Field(default_factory=list)
 
 
 class BillingResponse(BaseModel):
@@ -81,6 +96,16 @@ class ConfirmLineItem(BaseModel):
     batch_id: int
     batch_number: str
     expiry_date: str
+
+
+class PriceItemRequest(BaseModel):
+    """Price ONE medicine by id (used when the owner picks a different candidate
+    from a confirm dropdown). Server fetches the FEFO batch + MRP."""
+
+    medicine_id: int
+    quantity: int = Field(..., ge=1, le=1000)
+    name: str | None = Field(default=None)
+    unit: str | None = Field(default="strip")
 
 
 class ConfirmSaleRequest(BaseModel):

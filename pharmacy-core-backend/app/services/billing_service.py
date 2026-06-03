@@ -18,6 +18,7 @@ Why a service layer at all if it's "just" calling the graph?
 from app.ai.graphs.billing_graph import (
     get_billing_graph,
     get_confirm_graph,
+    get_price_graph,
     get_quote_graph,
 )
 from app.ai.state.billing_state import BillingState
@@ -44,6 +45,9 @@ def _state_to_response(final_state: dict) -> BillingResponse:
             expiry_date=item["expiry_date"],
             unit_price=item["unit_price"],
             line_total=item["line_total"],
+            needs_confirm=item.get("needs_confirm", False),
+            matched_from=item.get("matched_from"),
+            candidates=item.get("candidates", []),
         )
         for item in priced_items
     ]
@@ -81,6 +85,39 @@ class BillingService:
             {"pharmacist_input": pharmacist_input}
         )
         return _state_to_response(final_state)
+
+    def price_item(
+        self, medicine_id: int, quantity: int, name: str | None, unit: str | None
+    ) -> BillingLineItem | None:
+        """Price ONE medicine by id (FEFO batch + DB MRP). No LLM, no persist.
+
+        Returns the priced line, or None if the medicine has no usable stock.
+        Used when the owner switches a confirm row to a different candidate.
+        """
+        state: BillingState = {
+            "resolved_items": [{
+                "medicine_id": medicine_id,
+                "quantity": quantity,
+                "name": name or "",
+                "unit": unit or "strip",
+            }]
+        }
+        final_state = get_price_graph().invoke(state)
+        priced = final_state.get("priced_items") or []
+        if not priced:
+            return None
+        it = priced[0]
+        return BillingLineItem(
+            name=it["name"],
+            quantity=it["quantity"],
+            unit=it["unit"],
+            medicine_id=it["medicine_id"],
+            batch_id=it["batch_id"],
+            batch_number=it["batch_number"],
+            expiry_date=it["expiry_date"],
+            unit_price=it["unit_price"],
+            line_total=it["line_total"],
+        )
 
     def confirm_sale(
         self,

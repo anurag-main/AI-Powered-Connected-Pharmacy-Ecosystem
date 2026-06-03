@@ -15,9 +15,11 @@ Status decisions:
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.schemas.billing import (
+    BillingLineItem,
     BillingRequest,
     BillingResponse,
     ConfirmSaleRequest,
+    PriceItemRequest,
 )
 from app.services.billing_service import BillingService
 
@@ -81,6 +83,35 @@ def quote_sale(
     any names the catalog didn't match so the UI can prompt a fix + re-quote.
     """
     return service.quote_sale(payload.pharmacist_input)
+
+
+@router.post(
+    "/price-item",
+    response_model=BillingLineItem,
+    status_code=status.HTTP_200_OK,
+    summary="Price one medicine by id (used by the confirm dropdown)",
+)
+def price_item(
+    payload: PriceItemRequest,
+    service: BillingService = Depends(get_billing_service),
+) -> BillingLineItem:
+    """Return the FEFO batch + server-computed price for one medicine.
+
+    Used when the owner switches a confirm row to a different candidate medicine.
+    422 if the medicine has no usable (unexpired, in-stock) batch.
+    """
+    line = service.price_item(
+        medicine_id=payload.medicine_id,
+        quantity=payload.quantity,
+        name=payload.name,
+        unit=payload.unit,
+    )
+    if line is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"message": "No stock available for that medicine"},
+        )
+    return line
 
 
 @router.post(
