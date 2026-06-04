@@ -1321,3 +1321,33 @@ cd pharmacy-frontend; npm run dev      # http://localhost:3000 (or 3001)
 ```
 
 ---
+
+---
+
+## Concept — What makes an "AI agent" (vs a chatbot)
+
+**Analogy:** a chatbot = asking a friend a question once. An agent = sending a shop
+manager to the market who can go *back* and fix a mistake.
+
+An agent has 5 things a plain LLM call does not:
+1. **Plan** — break a goal into steps
+2. **Reason** — decide what's needed next
+3. **Remember** — store/retrieve facts (in DB/vector store, NOT just a bigger prompt)
+4. **Use tools** — call functions / APIs / DB queries
+5. **Self-correct** — notice a bad result and retry differently
+
+Core loop name: **ReAct + Reflection**. Reusable — point it at any messy problem.
+
+## Concept — Smart Reorder Agent (first real agent)
+
+**Brain in one line:** how fast a medicine *leaves* (velocity) vs how long resupply
+*takes* (lead time). Reorder when days_of_cover < lead_time + safety_buffer.
+
+**Senior insight:** math is deterministic code (tools); the agent is for fuzzy
+judgment (new product w/ 0 velocity, batch expiring before it sells, absurd qty).
+The agent CALLS the math, it doesn't do the math.
+
+### 3 beginner mistakes
+1. **Divide-by-zero on velocity** — 0 sales last month crashes days_of_cover. Treat 0 as "ignore".
+2. **No human-in-the-loop** — agent auto-spends money at 2 AM. Always PROPOSE, pharmacist approves.
+3. **All-time velocity instead of rolling 30-day** — stale demand looks urgent. Use a recent window.

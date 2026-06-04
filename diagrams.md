@@ -1462,3 +1462,67 @@ graph LR
 ```
 
 **OUTPUT — 422** (nothing billable): `detail.errors` lists the failure cascade through the nodes.
+
+---
+
+## Phase 3 — Smart Reorder Agent (agentic loop)
+
+> First "real agent" in the project: plans, reasons, uses tools, self-corrects, remembers.
+> Same ReAct + Reflection loop, pointed at the reorder problem.
+> LLM is for fuzzy judgment only — the math lives in deterministic tool functions it calls.
+
+```mermaid
+graph TD
+    A[Start: nightly trigger] --> B[fetch_candidates<br/>medicines + 4 numbers]
+    B --> C[analyze<br/>compute days_of_cover]
+    C --> D{needs reorder?}
+    D -- No --> H[skip]
+    D -- Yes --> E[decide_qty<br/>how many to order]
+    E --> F[sanity_check<br/>SELF-CORRECT]
+    F -- bad number --> E
+    F -- ok --> G[record + propose<br/>to pharmacist]
+    H --> I{more meds?}
+    G --> I
+    I -- Yes --> C
+    I -- No --> J[Final: reorder list]
+    classDef box fill:#e8f0ff,stroke:#1a3a8f,stroke-width:2px,color:#000;
+    classDef warn fill:#ffe8e8,stroke:#a00,stroke-width:2px,color:#000;
+    class A,B,C,E,G,J,H box;
+    class D,F,I warn;
+```
+
+**The 4 numbers per medicine:** current_stock, daily_velocity (30-day rolling),
+lead_time_days, days_of_cover (= stock ÷ velocity, computed).
+**Reorder rule:** days_of_cover < lead_time + safety_buffer → propose reorder.
+
+---
+
+## Phase 3 — Reorder Agent: node + orchestration graph
+
+> 2-node LangGraph. fetch (repo → state) then decide (state → pure tools → proposals).
+> Deterministic v1; the LLM "judgment" node is a future 3rd node for fuzzy cases.
+
+```mermaid
+graph TD
+    START([START]) --> F[fetch_candidates<br/>repo → stock + velocity]
+    F --> D[decide_reorders]
+    D --> ENDN([END: proposals])
+    subgraph INSIDE["inside decide_reorders, per medicine"]
+        C[days_of_cover] --> Q{cover < lead+safety?}
+        Q -- No / inf --> SKIP[skip]
+        Q -- Yes --> QTY[suggest_reorder_qty]
+        QTY --> SANE{is_qty_sane?}
+        SANE -- No --> ERR[self-correct: reject]
+        SANE -- Yes --> PROP[add proposal]
+    end
+    classDef box fill:#e8f0ff,stroke:#1a3a8f,stroke-width:2px,color:#000;
+    classDef pure fill:#e8ffe8,stroke:#1a7f1a,stroke-width:2px,color:#000;
+    classDef warn fill:#ffe8e8,stroke:#a00,stroke-width:2px,color:#000;
+    class START,F,D,ENDN,SKIP,PROP box;
+    class C,QTY pure;
+    class Q,SANE,ERR warn;
+```
+
+**Layering:** fetch = repo→node; decide = node→tools. SQL in repo, math in tools,
+decisions in the node. Files: `app/ai/state/reorder_state.py`,
+`app/ai/nodes/{fetch_candidates,decide_reorders}.py`, `app/ai/graphs/reorder_graph.py`.
