@@ -21,6 +21,7 @@ const navSections = [
     {
         label: "Operations",
         items: [
+            { href: "/reorder", label: "Reorder", icon: "inventory_2" },
             { href: "/sales", label: "Sales History", icon: "receipt_long" },
         ],
     },

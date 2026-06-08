@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.routers import billing as billing_router
 from app.routers import medicines as medicines_router
+from app.routers import reorder as reorder_router
 
 app = FastAPI(
     title="AI Pharmacy Ecosystem",
@@ -45,3 +46,4 @@ def health_check():
 # each gets its own file under app/routers/ and is included on one line below.
 app.include_router(medicines_router.router)
 app.include_router(billing_router.router)
+app.include_router(reorder_router.router)

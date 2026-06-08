@@ -47,3 +47,10 @@ export async function listMedicines() {
     const data = await res.json().catch(() => []);
     return { ok: res.ok, status: res.status, data };
 }
+
+/** Reorder agent: run the agent (fetch → decide → judge) and return proposals. Always 200. */
+export async function getReorderSuggestions() {
+    const res = await fetch(`${BASE}/api/v1/reorder/suggestions`);
+    const data = await res.json().catch(() => ({}));
+    return { ok: res.ok, status: res.status, data };
+}
