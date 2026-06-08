@@ -99,5 +99,6 @@ class SQLAlchemyReorderRepository:
                 "name": medicine.name,
                 "current_stock": stock.get(medicine.id, 0),
                 "daily_velocity": units_sold / window_days,
+                "days_since_added": (datetime.now() - medicine.created_at).days,
             })
         return candidates

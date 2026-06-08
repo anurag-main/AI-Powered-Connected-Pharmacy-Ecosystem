@@ -1351,3 +1351,38 @@ The agent CALLS the math, it doesn't do the math.
 1. **Divide-by-zero on velocity** — 0 sales last month crashes days_of_cover. Treat 0 as "ignore".
 2. **No human-in-the-loop** — agent auto-spends money at 2 AM. Always PROPOSE, pharmacist approves.
 3. **All-time velocity instead of rolling 30-day** — stale demand looks urgent. Use a recent window.
+
+---
+
+## Phase 3 — Reorder Agent: the LLM judgment node (crisp vs fuzzy)
+
+**What an LLM IS:** a thing that reads words and writes words. Brilliant at messy
+language + judgment that has no formula. NOT a calculator, NOT a database.
+
+**The rule:** crisp (has a correct answer) → code (tools). fuzzy (judgment/language)
+→ LLM. In the reorder agent ALL the math is code; the LLM is used in exactly ONE
+node — judging 0-sales medicines (brand-new product vs dead stock) using context
+the math never saw (`days_since_added`, the name → season).
+
+**"Agentic" = the LOOP** (gather → reason → act with tools → self-correct → propose),
+NOT "calls an LLM". The reorder agent was agentic before the LLM node existed.
+
+**Proven live (same numbers, opposite verdicts from CONTEXT):**
+- Vicks Cough Syrup, added 3 days ago → LLM: reorder 10 ("new + cough season")
+- Old Vitamin Tonic, added 400 days ago, 40 in stock → LLM: ignore (dead stock)
+Pure `days_of_cover` would have skipped BOTH identically.
+
+**Guardrails on the LLM (never trust it blindly):**
+1. Structured output — `with_structured_output(ReorderJudgment)` (Pydantic), not raw text.
+2. `is_qty_sane()` still vets the LLM's number (self-correct even the LLM).
+3. `needs_review=True` — the owner approves; the agent never auto-buys.
+4. try/except — LLM down → degrade to "needs manual review", agent doesn't crash.
+
+**LangGraph lesson — two writers need a reducer:** both `decide_reorders` and
+`judge_uncertain` write `state['proposals']`. Without `Annotated[list, add]` on that
+field, the 2nd node's return OVERWRITES the 1st. The reducer concatenates them.
+
+### 3 beginner mistakes
+1. LLM for the math → non-deterministic invoices, hallucinated quantities.
+2. LLM on every row → 10k medicines = 10k API calls. Batch the fuzzy ones into ONE call.
+3. Acting on the LLM directly → it hallucinates a qty. Gate it (sane-check) + human approve.

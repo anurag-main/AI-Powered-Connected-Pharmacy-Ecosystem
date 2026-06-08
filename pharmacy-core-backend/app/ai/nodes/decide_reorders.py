@@ -1,28 +1,26 @@
-"""LangGraph node — decide_reorders (the night manager — the AGENT'S BRAIN).
+"""LangGraph node — decide_reorders (the night manager — the deterministic brain).
 
-For each candidate, decides whether to reorder and how much, then writes a
-PROPOSAL (the pharmacist approves it later — we never auto-buy). This is the
-node where your 5 agent words finally show up:
-
+Makes every CLEAR-CUT call with pure math:
     REASON       — days_of_cover vs the reorder point
-    PLAN         — suggest_reorder_qty (how many to order)
-    SELF-CORRECT — is_qty_sane rejects an absurd number instead of proposing it
-    (REMEMBER / human-in-the-loop come when we persist + show proposals)
+    PLAN         — suggest_reorder_qty
+    SELF-CORRECT — is_qty_sane rejects an absurd number
+
+The one thing it CAN'T judge: a medicine with 0 recent sales. Brand-new product
+that hasn't sold yet, or dead stock to stop ordering? No formula answers that, so
+those go into state['uncertain'] for the LLM judgment node (judge_uncertain).
 
 Writes:
-    state['proposals'] — [{...candidate, days_of_cover, reorder_qty}, ...]
+    state['proposals'] — clear reorder proposals
+    state['uncertain'] — 0-sales items that need the LLM's judgment
     state['errors']    — any candidate whose suggested qty failed the sanity net
 
 Analogy (kid-level):
-    The night manager reads each row of the clerk's sheet and asks ONE question:
-    "Will we run dry before the supplier restocks?" If yes, he works out how many
-    boxes to order, double-checks the number isn't crazy, and writes a sticky note
-    for the owner. If there's plenty (or it never sells), he moves on.
+    The night manager handles every obvious row himself. The head-scratchers
+    ("this hasn't sold at all — new or dead?") he sets aside as a note for the
+    senior pharmacist (the LLM).
 
-v1 limitation (be honest in interviews):
-    Lead time + safety are flat CONSTANTS here. Real systems store lead time
-    PER SUPPLIER and derive safety stock from demand variability. We ship the
-    honest v1 and document the gap.
+v1 limitation: lead time + safety are flat CONSTANTS. Real systems store lead
+time per supplier and derive safety stock from demand variability.
 """
 from app.ai.state.reorder_state import ReorderState
 from app.ai.tools.reorder_tools import days_of_cover, is_qty_sane, suggest_reorder_qty
@@ -33,28 +31,32 @@ DEFAULT_SAFETY_DAYS = 2
 
 
 def decide_reorders(state: ReorderState) -> dict:
-    """Turn raw candidates into reorder proposals (reason → plan → self-correct)."""
+    """Clear cases -> proposals; 0-sales cases -> uncertain (handed to the LLM)."""
 
     candidates = state.get("candidates")
     if not candidates:
         return {"errors": ["decide_reorders: no candidates to evaluate"]}
 
-    # The trigger line: if cover drops below this many days, we're at risk of
-    # running dry before a resupply arrives.
     reorder_point = DEFAULT_LEAD_TIME_DAYS + DEFAULT_SAFETY_DAYS
 
     proposals: list[dict] = []
+    uncertain: list[dict] = []
     errors: list[str] = []
 
     for c in candidates:
+        # 0 recent sales -> math can't tell "brand new" from "dead stock".
+        # Hand it to the LLM judgment node instead of guessing.
+        if c["daily_velocity"] <= 0:
+            uncertain.append(c)
+            continue
+
         cover = days_of_cover(c["current_stock"], c["daily_velocity"])
 
-        # REASON — enough days of cover? (never-sold items have cover == inf,
-        # so `inf >= reorder_point` is True and they skip for free.)
+        # REASON — plenty of cover? confident skip.
         if cover >= reorder_point:
             continue
 
-        # PLAN — how many to order so we survive lead time + safety buffer.
+        # PLAN — how many to order to survive lead time + safety buffer.
         qty = suggest_reorder_qty(
             c["daily_velocity"], DEFAULT_LEAD_TIME_DAYS, DEFAULT_SAFETY_DAYS
         )
@@ -64,10 +66,10 @@ def decide_reorders(state: ReorderState) -> dict:
             errors.append(f"decide_reorders: insane qty {qty} for {c['name']!r}")
             continue
 
-        # PROPOSE — a sticky note for the owner to approve. We NEVER auto-buy.
+        # PROPOSE — a sticky note for the owner. We NEVER auto-buy.
         proposals.append({**c, "days_of_cover": cover, "reorder_qty": qty})
 
-    return {"proposals": proposals, "errors": errors}
+    return {"proposals": proposals, "uncertain": uncertain, "errors": errors}
 
 
 # ============================================================================
@@ -82,13 +84,13 @@ if __name__ == "__main__":
         "candidates": [
             {"medicine_id": 1, "name": "Crocin 500mg", "current_stock": 3, "daily_velocity": 2.0},   # low -> REORDER
             {"medicine_id": 2, "name": "Dolo 650", "current_stock": 100, "daily_velocity": 1.0},      # plenty -> skip
-            {"medicine_id": 3, "name": "Rare Syrup", "current_stock": 1, "daily_velocity": 0.0},      # never sells -> skip (inf)
+            {"medicine_id": 3, "name": "Rare Syrup", "current_stock": 1, "daily_velocity": 0.0},      # 0 sales -> uncertain
         ]
     }
 
     print("========== decide_reorders ==========")
     out = decide_reorders(test_state)
-    print("proposals:")
-    print(json.dumps(out.get("proposals", []), indent=2, ensure_ascii=False))
+    print("proposals:", json.dumps(out.get("proposals", []), ensure_ascii=False))
+    print("uncertain (-> LLM):", [u["name"] for u in out.get("uncertain", [])])
     print("errors:", out.get("errors", []))
-    # Expected once you implement it: ONE proposal (Crocin), the other two skipped.
+    # Expected: ONE proposal (Crocin); Dolo skipped (plenty); Rare Syrup -> uncertain.

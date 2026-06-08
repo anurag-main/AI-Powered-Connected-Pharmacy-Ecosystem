@@ -18,13 +18,19 @@ class ReorderState(TypedDict, total=False):
     """State passed between the reorder graph's nodes."""
 
     # ----- Filled by fetch_candidates — every medicine's raw numbers -----
-    # [{"medicine_id": 1, "name": "Crocin 500mg", "current_stock": 3, "daily_velocity": 2.0}, ...]
+    # [{"medicine_id": 1, "name": "Crocin 500mg", "current_stock": 3,
+    #   "daily_velocity": 2.0, "days_since_added": 3}, ...]
     candidates: list[dict]
 
-    # ----- Filled by decide_reorders — only the medicines that need ordering -----
-    # [{...candidate, "days_of_cover": 1.5, "reorder_qty": 10}, ...]
-    proposals: list[dict]
+    # ----- Filled by decide_reorders — 0-sales items it couldn't judge -----
+    # Passed to judge_uncertain (the LLM): brand-new product vs dead stock?
+    uncertain: list[dict]
 
-    # ----- Cross-cutting soft errors (same reducer pattern as BillingState) -----
-    # Annotated[..., add] = CONCATENATE each node's errors instead of overwriting.
+    # ----- Reorder proposals — written by BOTH decide_reorders AND judge_uncertain.
+    # Annotated[..., add] CONCATENATES both nodes' lists. WITHOUT the reducer,
+    # judge_uncertain's return would OVERWRITE decide_reorders' proposals. This is
+    # the key LangGraph lesson: a field with two writers needs a reducer.
+    proposals: Annotated[list[dict], add]
+
+    # ----- Cross-cutting soft errors (same reducer pattern) -----
     errors: Annotated[list[str], add]

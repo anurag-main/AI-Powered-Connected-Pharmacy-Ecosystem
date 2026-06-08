@@ -1526,3 +1526,28 @@ graph TD
 **Layering:** fetch = repo→node; decide = node→tools. SQL in repo, math in tools,
 decisions in the node. Files: `app/ai/state/reorder_state.py`,
 `app/ai/nodes/{fetch_candidates,decide_reorders}.py`, `app/ai/graphs/reorder_graph.py`.
+
+---
+
+## Phase 3 — Reorder Agent v2: + LLM judgment node (crisp vs fuzzy)
+
+> 3-node graph. Math (code) handles clear cases; the LLM handles ONLY the
+> fuzzy 0-sales judgment. proposals has an `add` reducer (two writers).
+
+```mermaid
+graph TD
+    START([START]) --> F[fetch_candidates<br/>repo: stock + velocity + age]
+    F --> D[decide_reorders<br/>CODE: clear math cases]
+    D -->|clear| P[(proposals)]
+    D -->|0 sales = fuzzy| J[judge_uncertain<br/>LLM: new vs dead stock]
+    J -->|reorder verdicts| P
+    P --> ENDN([END])
+    classDef box fill:#e8f0ff,stroke:#1a3a8f,stroke-width:2px,color:#000;
+    classDef llm fill:#f3e8ff,stroke:#6b1a8f,stroke-width:2px,color:#000;
+    class START,F,D,P,ENDN box;
+    class J llm;
+```
+
+**Live proof:** Vicks (new) → reorder; Old Tonic (400d) → ignore. Same zero-sales
+numbers, opposite verdicts — because the LLM read context (`days_since_added`, name).
+Guardrails: structured output (Pydantic) + is_qty_sane + needs_review (owner approves).
