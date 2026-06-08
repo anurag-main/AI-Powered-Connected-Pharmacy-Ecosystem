@@ -4,6 +4,8 @@ What the GET /api/v1/reorder/suggestions endpoint returns. The graph's proposals
 are loose dicts with extra internal keys (daily_velocity, days_since_added, ...);
 this schema picks only the fields the UI needs and IGNORES the rest.
 """
+from datetime import datetime
+
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -36,3 +38,26 @@ class ReorderSuggestionsResponse(BaseModel):
     count: int
     proposals: list[ReorderProposal]
     errors: list[str] = []
+
+
+class ApproveReorderRequest(BaseModel):
+    """Request body for POST /reorder/approve — one suggestion the owner approved."""
+
+    medicine_id: int
+    quantity: int = Field(..., gt=0, description="Units to order (server still trusts this is sane)")
+    source: str = Field("rule", description="'rule' or 'llm' — where the suggestion came from")
+    reason: str | None = None
+
+
+class ReorderRequestOut(BaseModel):
+    """A persisted (approved) reorder request — what /approve returns."""
+
+    id: int
+    medicine_id: int
+    quantity: int
+    source: str
+    reason: str | None = None
+    status: str
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)  # build straight from the ORM row

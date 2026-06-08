@@ -4,7 +4,7 @@ import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
 import Icon from "@/components/ui/icon";
-import { getReorderSuggestions } from "@/lib/api";
+import { getReorderSuggestions, approveReorder } from "@/lib/api";
 
 // Small badge showing whether a proposal came from deterministic math ("Rule")
 // or the LLM judgment node ("AI").
@@ -41,6 +41,14 @@ function ReorderPage() {
     }, []);
 
     const setRow = (id, s) => setStatus((prev) => ({ ...prev, [id]: s }));
+
+    // Approve = persist a pending reorder request via the backend (idempotent).
+    async function approveOne(p) {
+        setRow(p.medicine_id, "saving");
+        const { ok } = await approveReorder(p);
+        setRow(p.medicine_id, ok ? "approved" : "error");
+    }
+
     const approvedCount = Object.values(status).filter((s) => s === "approved").length;
 
     return (
@@ -138,9 +146,14 @@ function ReorderPage() {
                                                             <>
                                                                 <Button
                                                                     size="sm"
-                                                                    onClick={() => setRow(p.medicine_id, "approved")}
+                                                                    disabled={s === "saving"}
+                                                                    onClick={() => approveOne(p)}
                                                                 >
-                                                                    Approve
+                                                                    {s === "saving"
+                                                                        ? "Saving…"
+                                                                        : s === "error"
+                                                                          ? "Retry"
+                                                                          : "Approve"}
                                                                 </Button>
                                                                 <Button
                                                                     size="sm"

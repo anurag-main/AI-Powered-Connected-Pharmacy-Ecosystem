@@ -8,7 +8,11 @@ the status is always 200 (an empty proposals list is a valid answer). The future
 """
 from fastapi import APIRouter, Depends, status
 
-from app.schemas.reorder import ReorderSuggestionsResponse
+from app.schemas.reorder import (
+    ApproveReorderRequest,
+    ReorderRequestOut,
+    ReorderSuggestionsResponse,
+)
 from app.services.reorder_service import ReorderService
 
 
@@ -36,4 +40,28 @@ def get_reorder_suggestions(
     """
     
     return service.get_suggestions()
-    ...
+
+
+@router.post(
+    "/approve",
+    response_model=ReorderRequestOut,
+    status_code=status.HTTP_200_OK,
+    summary="Approve a reorder suggestion (idempotent)",
+)
+def approve_reorder(
+    payload: ApproveReorderRequest,
+    service: ReorderService = Depends(get_reorder_service),
+) -> ReorderRequestOut:
+    """Persist an approved suggestion as a 'pending' reorder request.
+
+    Idempotent: approving the same medicine twice returns the EXISTING pending
+    row instead of creating a duplicate — a double-click can't double-order.
+    Returns 200 (not 201) because the meaning is "this medicine is approved",
+    whether the row was just created or already existed.
+    """
+    return service.approve(
+        medicine_id=payload.medicine_id,
+        quantity=payload.quantity,
+        source=payload.source,
+        reason=payload.reason,
+    )

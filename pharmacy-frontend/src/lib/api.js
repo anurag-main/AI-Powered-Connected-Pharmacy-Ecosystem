@@ -54,3 +54,13 @@ export async function getReorderSuggestions() {
     const data = await res.json().catch(() => ({}));
     return { ok: res.ok, status: res.status, data };
 }
+
+/** Approve one proposal → persists a pending reorder request. Idempotent. */
+export async function approveReorder(proposal) {
+    return postJSON("/api/v1/reorder/approve", {
+        medicine_id: proposal.medicine_id,
+        quantity: proposal.reorder_qty,
+        source: proposal.source,
+        reason: proposal.reason || null,
+    });
+}
