@@ -44,3 +44,13 @@ class SQLAlchemyReorderRequestRepository:
         self._db.commit()
         self._db.refresh(row)
         return row
+    
+    def pending_medicine_ids(self) -> set[int]:
+        """Return medicine_ids that already have a 'pending' reorder request.
+
+        Used by fetch_candidates to skip medicines the pharmacist already approved.
+        """
+        stmt = select(ReorderRequest.medicine_id).where(
+            ReorderRequest.status == "pending"
+        )
+        return set(self._db.scalars(stmt).all())

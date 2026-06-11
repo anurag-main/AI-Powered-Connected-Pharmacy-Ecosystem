@@ -73,7 +73,11 @@ class SQLAlchemyReorderRepository:
         )
         return {med_id: int(total or 0) for med_id, total in self._db.execute(stmt).all()}
 
-    def get_reorder_candidates(self, window_days: int = VELOCITY_WINDOW_DAYS) -> list[dict]:
+    def get_reorder_candidates(
+        self,
+        window_days: int = VELOCITY_WINDOW_DAYS,
+        exclude_ids: set[int] | None = None,
+    ) -> list[dict]:
         """Raw numbers per medicine for the reorder agent to reason over.
 
         Stitches the two aggregate queries above together with the full medicine
@@ -101,4 +105,6 @@ class SQLAlchemyReorderRepository:
                 "daily_velocity": units_sold / window_days,
                 "days_since_added": (datetime.now() - medicine.created_at).days,
             })
+        if exclude_ids:
+            candidates = [c for c in candidates if c["medicine_id"] not in exclude_ids]
         return candidates

@@ -21,12 +21,22 @@ Why the node owns its own session (same as resolve_medicine):
 from app.ai.state.reorder_state import ReorderState
 from app.core.database import SessionLocal
 from app.repositories.sqlalchemy_reorder_repository import SQLAlchemyReorderRepository
+from app.repositories.sqlalchemy_reorder_request_repository import (
+    SQLAlchemyReorderRequestRepository,
+)
 
 
 def fetch_candidates(state: ReorderState) -> dict:
-    """Load every medicine's stock + velocity into state['candidates']."""
+    """Load every medicine's stock + velocity into state['candidates'].
+
+    Excludes medicines that already have a pending reorder request — the agent
+    remembers what it already proposed and the pharmacist approved.
+    """
     with SessionLocal() as db:
-        candidates = SQLAlchemyReorderRepository(db).get_reorder_candidates()
+        pending = SQLAlchemyReorderRequestRepository(db).pending_medicine_ids()
+        candidates = SQLAlchemyReorderRepository(db).get_reorder_candidates(
+            exclude_ids=pending or None
+        )
     return {"candidates": candidates}
 
 
