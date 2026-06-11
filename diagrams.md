@@ -1551,3 +1551,200 @@ graph TD
 **Live proof:** Vicks (new) → reorder; Old Tonic (400d) → ignore. Same zero-sales
 numbers, opposite verdicts — because the LLM read context (`days_since_added`, name).
 Guardrails: structured output (Pydantic) + is_qty_sane + needs_review (owner approves).
+
+---
+
+## TARGET — Supervisor Multi-Agent System (the system we're growing into)
+
+> Research-backed end goal (see AGENTIC_RESEARCH.md). A supervisor routing node
+> dispatches to specialist agents and regains control after each. Recursion guard
+> + shared state with reducers + structured routing decision. Start supervisor,
+> graduate to swarm only if traces prove latency is the bottleneck.
+
+```mermaid
+graph TD
+    U[Pharmacist request] --> SUP{{"SUPERVISOR\nrouting node\nstructured RoutingDecision"}}
+
+    SUP -->|restock?| RE[Reorder Agent\n✅ built]
+    SUP -->|expiring soon?| EX[Expiry-Risk Agent\n⭐ next]
+    SUP -->|drug safety?| DI[Drug-Interaction Agent\nRAG + ChromaDB]
+    SUP -->|business question?| AQ[Ask-Your-Pharmacy\ntext-to-SQL]
+
+    RE -->|done| SUP
+    EX -->|done| SUP
+    DI -->|done| SUP
+    AQ -->|done| SUP
+
+    SUP -->|"handoff_count > 3\nrecursion guard"| HUM[Escalate to human]
+    SUP -->|all done| OUT([Answer / proposals])
+
+    classDef sup fill:#f3e8ff,stroke:#6b1a8f,stroke-width:3px,color:#000
+    classDef built fill:#e5fbe5,stroke:#1f7a1f,stroke-width:2px,color:#000
+    classDef next fill:#fff5d6,stroke:#a86b00,stroke-width:2px,color:#000
+    classDef todo fill:#e8f0ff,stroke:#1a3a8f,stroke-width:2px,color:#000
+    classDef guard fill:#ffe5e5,stroke:#a83333,stroke-width:2px,color:#000
+
+    class SUP sup
+    class RE built
+    class EX next
+    class DI,AQ todo
+    class HUM guard
+```
+
+**Cross-cutting techs layered on top (all 8 JD must-haves):** tool use ✅, structured
+output ✅, HITL ✅/formalize with `interrupt()`, memory (started), + RAG, MCP server,
+LangSmith tracing, eval suite. Build order lives in AGENTIC_RESEARCH.md §6.
+
+---
+
+## Phase 3 — Reorder Agent v3: + Agent Memory (exclude already-approved)
+
+> The agent now reads its own past actions before suggesting. If a medicine already
+> has a `pending` row in `reorder_requests`, it is invisible to the agent until that
+> order is closed. This is the "remember" capability of the ReAct loop.
+
+### View 1 — The full agent loop with memory
+
+```mermaid
+graph TD
+    START([START]) --> F
+
+    subgraph F["fetch_candidates node"]
+        F1["① pending_medicine_ids()\nreorder_requests WHERE status='pending'"]
+        F2["② get_reorder_candidates(exclude_ids=pending)\nbatches + sale_items, skip approved"]
+        F1 -->|"set of int IDs"| F2
+    end
+
+    F --> D["decide_reorders node\nmath: days_of_cover < lead+safety?"]
+    D -->|"clear velocity"| P[(proposals)]
+    D -->|"0 sales fuzzy"| J["judge_uncertain node\nLLM: new vs dead stock"]
+    J --> P
+    P --> END2([END: proposals to pharmacist])
+
+    END2 --> PH["Pharmacist sees suggestions\nApproves or dismisses"]
+    PH -->|"POST /approve"| DB2[("reorder_requests table\nstatus = pending")]
+    DB2 -.->|"next run: medicine filtered out"| F1
+
+    classDef node fill:#e8f0ff,stroke:#1a3a8f,stroke-width:2px,color:#000
+    classDef llm fill:#f3e8ff,stroke:#6b1a8f,stroke-width:2px,color:#000
+    classDef db fill:#e5fbe5,stroke:#1f7a1f,stroke-width:2px,color:#000
+    classDef human fill:#fff5d6,stroke:#a86b00,stroke-width:2px,color:#000
+    classDef mem fill:#ffe5e5,stroke:#a83333,stroke-width:2px,color:#000
+
+    class D,F2 node
+    class J llm
+    class DB2 db
+    class PH human
+    class F1 mem
+```
+
+---
+
+### View 2 — What changes inside `fetch_candidates` (before vs after memory)
+
+```mermaid
+graph LR
+    subgraph before["BEFORE — no memory"]
+        B1["open SessionLocal"]
+        B2["get_reorder_candidates()"]
+        B3["returns ALL medicines\nincluding already approved ones"]
+        B1 --> B2 --> B3
+    end
+
+    subgraph after["AFTER — with memory"]
+        A1["open SessionLocal"]
+        A2["pending_medicine_ids()\nSELECT medicine_id FROM reorder_requests\nWHERE status = 'pending'"]
+        A3["get_reorder_candidates(exclude_ids=pending)\nskips medicine_id IN pending set"]
+        A4["returns only medicines\nthat STILL need a decision"]
+        A1 --> A2 -->|"e.g. {7, 12}"| A3 --> A4
+    end
+
+    classDef bad fill:#ffe5e5,stroke:#a83333,stroke-width:2px,color:#000
+    classDef good fill:#e5fbe5,stroke:#1f7a1f,stroke-width:2px,color:#000
+    classDef step fill:#e8f0ff,stroke:#1a3a8f,stroke-width:2px,color:#000
+
+    class before,B1,B2,B3 bad
+    class after,A1,A2,A3,A4 good
+```
+
+---
+
+### View 3 — The full data flow across all 4 tables
+
+```mermaid
+graph TD
+    subgraph DB["MySQL — 4 tables the agent touches"]
+        T1[("batches\nstock per medicine")]
+        T2[("sale_items + sales\nunits sold in last 30d")]
+        T3[("medicines\nfull catalog")]
+        T4[("reorder_requests\nstatus = pending / fulfilled")]
+    end
+
+    subgraph REPOS["Repository layer"]
+        R1["stock_on_hand_by_medicine()\nSUM qty GROUP BY medicine_id"]
+        R2["units_sold_since(cutoff)\nSUM qty JOIN sales GROUP BY medicine_id"]
+        R3["full medicine list\nSELECT * FROM medicines"]
+        R4["pending_medicine_ids()\nSELECT medicine_id WHERE status=pending"]
+        R5["get_reorder_candidates(exclude_ids)\nstitches R1+R2+R3, filters R4"]
+    end
+
+    subgraph AGENT["Agent — fetch_candidates node"]
+        N1["calls pending_medicine_ids() → {7,12}"]
+        N2["calls get_reorder_candidates(exclude_ids={7,12})"]
+        N3["state.candidates = list of dicts\n(medicines that still need a decision)"]
+    end
+
+    T1 --> R1 --> R5
+    T2 --> R2 --> R5
+    T3 --> R3 --> R5
+    T4 --> R4 --> N1
+    R5 --> N2
+    N1 --> N2 --> N3
+
+    classDef tbl fill:#e8f0ff,stroke:#1a3a8f,stroke-width:2px,color:#000
+    classDef repo fill:#fff5d6,stroke:#a86b00,stroke-width:2px,color:#000
+    classDef agent fill:#e5fbe5,stroke:#1f7a1f,stroke-width:2px,color:#000
+    classDef mem fill:#ffe5e5,stroke:#a83333,stroke-width:2px,color:#000
+
+    class T1,T2,T3 tbl
+    class T4 mem
+    class R1,R2,R3,R5 repo
+    class R4 mem
+    class N1,N2,N3 agent
+```
+
+---
+
+### View 4 — Sequence: one full approve-then-refresh cycle
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant PH as Pharmacist (browser)
+    participant API as FastAPI
+    participant AG as Reorder Agent
+    participant RR as reorder_requests table
+    participant RRE as SQLAlchemyReorderRepository
+
+    PH->>API: GET /reorder/suggestions (1st run)
+    API->>AG: graph.invoke({})
+    AG->>RR: pending_medicine_ids() → {} empty
+    AG->>RRE: get_reorder_candidates(exclude_ids=None)
+    RRE-->>AG: [Paracetamol, Crocin, Vicks ...]
+    AG-->>API: proposals=[Paracetamol, Crocin, Vicks]
+    API-->>PH: show suggestions
+
+    PH->>API: POST /reorder/approve {medicine_id:7 = Paracetamol}
+    API->>RR: find_pending(7) → None → create row
+    RR-->>API: {id:1, medicine_id:7, status:pending}
+    API-->>PH: 200 OK — Approved
+
+    PH->>API: GET /reorder/suggestions (refresh)
+    API->>AG: graph.invoke({})
+    AG->>RR: pending_medicine_ids() → {7}
+    Note over AG: Paracetamol is in the set
+    AG->>RRE: get_reorder_candidates(exclude_ids={7})
+    RRE-->>AG: [Crocin, Vicks ...] ← Paracetamol gone
+    AG-->>API: proposals=[Crocin, Vicks]
+    API-->>PH: Paracetamol no longer in list
+```

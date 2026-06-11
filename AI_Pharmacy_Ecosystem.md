@@ -16,8 +16,10 @@
 9. [Database Architecture](#9-database-architecture)
 10. [Folder Structure](#10-folder-structure)
 11. [Learning Roadmap](#11-learning-roadmap)
-12. [Engineering Principles](#12-engineering-principles)
-13. [Stack Summary](#13-final-stack-summary)
+12. [Current State Snapshot](#12-current-state-snapshot)
+13. [Agentic AI Learning Plan (Multi-Agent)](#13-agentic-ai-learning-plan-multi-agent)
+14. [Engineering Principles](#14-engineering-principles)
+15. [Stack Summary](#15-final-stack-summary)
 
 ---
 
@@ -467,66 +469,160 @@ project-root/
 
 ## 11. Learning Roadmap
 
+> **Updated 2026-06-11.** The roadmap below reflects the real path taken, including the
+> **pivot from voice-first to agentic/multi-agent** (voice hit a Marathi/Hindi STT accuracy
+> ceiling — see §12). `done` = shipped, `active` = building now, plain = planned.
+
 ```mermaid
 gantt
-    title AI Pharmacy Platform - Learning & Build Roadmap
+    title AI Pharmacy Platform — Roadmap (updated 2026-06-11)
     dateFormat  YYYY-MM-DD
-    section Phase 0 - Foundation
-    Docker Basics           :a1, 2025-01-01, 14d
-    MySQL + FastAPI          :a2, after a1, 14d
-    GitHub Actions CI/CD     :a3, after a2, 7d
+    section Foundation
+    FastAPI 3-layer arch         :done, a1, 2025-09-01, 30d
+    MySQL + SQLAlchemy + Alembic :done, a2, after a1, 30d
 
-    section Phase 1 - Pharmacy Backend
-    SQLAlchemy + Alembic     :b1, after a3, 14d
-    Billing & Invoices       :b2, after b1, 14d
-    Inventory Management     :b3, after b2, 14d
+    section Billing
+    Voice/typed quote + confirm  :done, b1, after a2, 30d
+    Next.js voice billing UI     :done, b2, after b1, 21d
 
-    section Phase 2 - Production Deploy
-    NGINX + VPS Setup        :c1, after b3, 10d
-    Docker Compose Deploy    :c2, after c1, 7d
+    section Agent 1 - Reorder
+    Smart Reorder (3-node graph) :done, c1, after b2, 21d
+    Persisted approvals + memory :done, c2, after c1, 14d
 
-    section Phase 3 - AI Integration
-    LangGraph Basics         :d1, after c2, 14d
-    Medicine Extraction Agent:d2, after d1, 14d
+    section Multi-Agent (NOW)
+    Expiry-Risk Agent            :active, d1, 2026-06-11, 14d
+    Supervisor orchestration     :d2, after d1, 14d
+    LangSmith observability      :d3, after d2, 7d
 
-    section Phase 4 - RAG System
-    Embeddings + ChromaDB    :e1, after d2, 14d
-    Medicine Knowledge Base  :e2, after e1, 14d
+    section RAG + Eval
+    Drug-Interaction RAG (Chroma):e1, after d3, 21d
+    Eval suite (LLM-as-judge)    :e2, after e1, 14d
 
-    section Phase 5 - Advanced AI
-    Voice AI (STT + TTS)     :f1, after e2, 21d
-    Multi-Agent Workflows    :f2, after f1, 21d
-    Reminder Intelligence    :f3, after f2, 14d
+    section Productionize
+    Text-to-SQL + MCP server     :f1, after e2, 21d
+    Memory (Redis + vector)      :f2, after f1, 14d
+    Docker + CI/CD + Deploy      :f3, after f2, 21d
 ```
 
 ### Phase Details
 
-#### 🔵 Phase 0 — Foundation
-- **Learn:** Docker, MySQL, FastAPI, GitHub Actions
-- **Build:** Basic backend, CRUD APIs, Dockerized dev environment
+#### 🔵 Phase 0 — Foundation ✅ DONE
+- **Learned:** FastAPI 3-layer architecture (router → service → repository), Pydantic, DI, venv, Git
+- **Built:** Backend skeleton, medicines CRUD, health endpoint — runs locally on `uvicorn`
 
-#### 🟢 Phase 1 — Pharmacy Backend
-- **Learn:** SQLAlchemy, Alembic migrations, JWT authentication, DB transactions
-- **Build:** Billing module, Inventory module, Invoice generation
+#### 🟢 Phase 1 — Persistent Backend ✅ DONE
+- **Learned:** SQLAlchemy 2.0 models, Alembic migrations, FEFO, indexes, DB transactions
+- **Built:** MySQL-backed medicines + batches, FEFO batch selection
 
-#### 🟡 Phase 2 — Production Deployment
-- **Learn:** NGINX configuration, VPS deployment, Docker Compose, CI/CD pipelines
-- **Deploy:** Full backend + frontend on live server
+#### 🟣 Phase 2 — Billing (LangGraph) ✅ DONE
+- **Learned:** LangGraph state/nodes/reducers, structured output, tool use, server-side pricing
+- **Built:** Voice/typed billing — `/quote` + `/confirm`, 5-node graph, Next.js voice UI
 
-#### 🟣 Phase 3 — AI Integration
-- **Learn:** LangGraph, Tool calling, Agent state management, Workflow graphs
-- **Build:** Medicine extraction workflow
+#### 🤖 Phase 3 — Agent 1: Smart Reorder ✅ DONE
+- **Learned:** the ReAct + Reflection loop, crisp-vs-fuzzy (math in tools, LLM for judgment),
+  idempotency, human-in-the-loop, **agent memory** (reads its own past approvals)
+- **Built:** 3-node reorder agent (fetch → decide → LLM judge), `/suggestions` + `/approve`,
+  `reorder_requests` table, frontend Reorder screen
 
-#### 🔴 Phase 4 — RAG System
-- **Learn:** Embeddings, text chunking, vector retrieval, semantic search
-- **Build:** Medicine knowledge assistant with ChromaDB
+#### 🟠 Phase 4 — Multi-Agent System 🔵 IN PROGRESS (current)
+- **Learn:** supervisor orchestration, recursion guard, shared state, LangSmith tracing
+- **Build:** Expiry-Risk agent → Supervisor over Reorder + Expiry → observability
+- → full plan in **§13** and `AGENTIC_RESEARCH.md`
 
-#### ⚫ Phase 5 — Advanced AI
-- **Build:** Reminder Agent, Voice AI (Marathi/Hindi), Full multi-agent orchestration
+#### 🔴 Phase 5 — RAG + Evaluation ⚪ PLANNED
+- **Learn:** embeddings, chunking, vector retrieval, eval sets, LLM-as-judge
+- **Build:** Drug-Interaction agent (ChromaDB), eval suite
+
+#### ⚫ Phase 6 — Productionize ⚪ PLANNED
+- **Build:** Text-to-SQL agent + MCP server, Redis+vector memory, Docker/CI-CD/deploy
 
 ---
 
-## 12. Engineering Principles
+## 12. Current State Snapshot
+
+> Where the project actually is on **2026-06-11**. Single source of truth for "what's done".
+
+| Area | Status | Notes |
+|------|--------|-------|
+| FastAPI 3-layer backend | ✅ Done | router → service → repository, runs on `uvicorn` |
+| MySQL + SQLAlchemy + Alembic | ✅ Done | native MySQL 8 + PyMySQL; migrations in `migrations/versions/` |
+| Medicines / Batches / FEFO | ✅ Done | expiry-aware batch selection |
+| Billing (LangGraph) | ✅ Done | `/quote` + `/confirm`, 5-node graph, server-side pricing |
+| Frontend (Next.js Pages Router, JS) | ✅ Done | voice billing UI + Reorder screen + sidebar |
+| **Agent 1 — Smart Reorder** | ✅ Done | 3-node graph (fetch → decide → LLM judge), idempotent approve |
+| Reorder agent **memory** | ✅ Done | excludes already-approved medicines via `pending_medicine_ids()` |
+| **Agent 2 — Expiry-Risk** | 🔵 Next | the immediate next build |
+| Supervisor / multi-agent | ⚪ Planned | routes Reorder + Expiry (+ future agents) |
+| LangSmith observability | ⚪ Planned | tracing across all nodes |
+| Drug-Interaction (RAG) | ⚪ Planned | ChromaDB — Phase 5 |
+| Ask-Your-Pharmacy (text-to-SQL) | ⚪ Planned | Phase 6 |
+| MCP server | ⚪ Planned | expose pharmacy tools via MCP |
+| Eval suite | ⚪ Planned | LLM-as-judge + test sets |
+| Docker / CI-CD / Deploy | ⚪ Planned | containerize the working app |
+| Voice STT (Marathi/Hindi) | ⏸️ Parked | accuracy ceiling → pivoted to agentic; stays as one input, not centerpiece |
+
+**The pivot (why the roadmap changed):** voice billing has a real accuracy ceiling on Marathi/Hindi
+STT + medicine names. Rather than fight it, the project broadened into **agentic AI** — agents that
+plan, reason, remember, use tools, and self-correct — which is both higher-value for a 15+ LPA job
+and not bottlenecked on STT. Voice remains *one* input, not the whole product.
+
+---
+
+## 13. Agentic AI Learning Plan (Multi-Agent)
+
+> Condensed from **`AGENTIC_RESEARCH.md`** (full version has job-market numbers, supervisor-vs-swarm
+> tradeoffs, and the market product landscape). This is the learning track that turns the project
+> into a complete agentic-AI portfolio piece.
+
+### Goal
+Evolve the single Smart Reorder Agent into a **Supervisor multi-agent system**, and touch all **8
+must-know production techs** on the way — so every one becomes a real interview story.
+
+### The 8 must-know techs (what every 2026 agentic JD asks for)
+
+| # | Tech | Where it lives in our project |
+|---|------|-------------------------------|
+| 1 | **Multi-agent orchestration** | NEW: supervisor routing to specialist agents |
+| 2 | **Tool use / function calling** | ✅ `reorder_tools.py` (pure math), repos (SQL) |
+| 3 | **RAG** | NEW: Drug-Interaction agent over ChromaDB |
+| 4 | **Agent memory** | ✅ started (reorder reads `reorder_requests`) → Redis + vector |
+| 5 | **MCP (Model Context Protocol)** | NEW: wrap pharmacy tools as an MCP server |
+| 6 | **Human-in-the-loop** | ✅ pharmacist approves reorders → formalize with `interrupt()` |
+| 7 | **Observability / tracing** | NEW: LangSmith on every node (89% of orgs expect this) |
+| 8 | **Evaluation (evals)** | NEW: test set + LLM-as-judge |
+
+### The agent roster (specialists the supervisor will route to)
+
+| Agent | Status | Teaches | Realistic for a single pharmacy? |
+|-------|--------|---------|----------------------------------|
+| Smart Reorder | ✅ built | tool use, structured output, HITL, memory | ✅ |
+| **Expiry-Risk** | 🔵 next | 2nd agent + risk scoring | ✅ (cuts waste up to 25% in real products) |
+| Drug-Interaction (RAG) | ⚪ planned | RAG + ChromaDB + embeddings | ✅ ("AI pharmacist" — Sully.ai, Pharmie) |
+| Ask-Your-Pharmacy (text-to-SQL) | ⚪ planned | safe text-to-SQL | ✅ (saves ~15 hrs/week) |
+| Adherence / Re-purchase | 💡 candidate | scheduled/cron-triggered agents | ✅ (WestCX, Pharmie do this) |
+| Demand-Forecast | 💡 stretch | agent-feeding-agent | ✅ feeds the reorder agent |
+
+> Deliberately **out of scope** (real products lead with these, but we can't do them well):
+> voice refill (STT ceiling), prior-authorization (US-insurance), robotic dispensing (hardware).
+> Knowing what to *skip* is product judgment — itself an interview talking point.
+
+### Architecture: Supervisor pattern (start here, graduate to swarm later)
+A dedicated routing node uses structured output to pick the next specialist, regains control after
+each, and enforces a **recursion guard** (`handoff_count` limit → escalate to human). The target
+architecture diagram lives in `diagrams.md` → *"TARGET — Supervisor Multi-Agent System"*.
+
+### Build order (one new concept per step)
+1. **Expiry-Risk Agent** — a 2nd specialist (cheap win, reuses batch data) ← **doing now**
+2. **Supervisor** over Reorder + Expiry — the multi-agent moment
+3. **LangSmith observability** — wire once, covers everything
+4. **Drug-Interaction RAG** — the highest-value single skill
+5. **Eval suite** — prove correctness (LLM-as-judge)
+6. **Text-to-SQL agent + MCP server** — safe queries + standards-compliant tools
+7. **Memory upgrade** — Redis short-term + vector long-term
+
+---
+
+## 14. Engineering Principles
 
 > These are the non-negotiables for building a production-grade system.
 
@@ -540,7 +636,7 @@ gantt
 
 ---
 
-## 13. Final Stack Summary
+## 15. Final Stack Summary
 
 | Layer | Technology | Notes |
 |---|---|---|
@@ -581,4 +677,4 @@ Into **one connected ecosystem** built for Bharat. 🇮🇳
 
 ---
 
-*Document Version: 1.0 | Stack: JavaScript + Python + FastAPI + LangGraph*
+*Document Version: 2.0 (updated 2026-06-11 — agentic/multi-agent pivot) | Stack: JavaScript + Python + FastAPI + LangGraph*
