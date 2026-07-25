@@ -1,10 +1,10 @@
 """HTTP request/response schemas for the Business Intelligence Agent."""
-from pydantic import BaseModel , Feild 
+from pydantic import BaseModel , Field 
 
 class BusinessAnalysisRequest(BaseModel):
       """Request received from the frontend."""
       
-      question : str = Feild(...,min_length=3,
+      question : str = Field(...,min_length=3,
         max_length=500,
         description="Natural language business question.",
         examples=["Why did my profit decrease this month?"], )

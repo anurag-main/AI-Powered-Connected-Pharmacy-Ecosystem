@@ -10,11 +10,11 @@ from app.schemas.business import (
   BusinessAnalysisResponse
 )
 
-from app.services import BusinessService 
+from app.services.business_service import BusinessService
 
 def get_business_service() -> BusinessService :
       """Dependency provider for BusinessService."""
-      return BusinessService
+      return BusinessService()
     
 router = APIRouter(
     prefix="/api/v1/business",
