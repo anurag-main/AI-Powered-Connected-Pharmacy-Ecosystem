@@ -1748,3 +1748,108 @@ sequenceDiagram
     AG-->>API: proposals=[Crocin, Vicks]
     API-->>PH: Paracetamol no longer in list
 ```
+
+---
+
+## Business Intelligence Agent — Architecture (component layout + file names)
+
+```mermaid
+graph TB
+    Client["Frontend / Swagger<br/>POST /api/v1/business/analyze"]
+
+    subgraph HTTP["HTTP layer"]
+        Router["routers/business.py<br/>analyze_business()"]
+        Schemas["schemas/business.py<br/>Request / Response"]
+    end
+
+    subgraph SvcLayer["Service layer"]
+        Service["services/business_service.py<br/>BusinessService.analyze()"]
+    end
+
+    subgraph GraphLayer["LangGraph agent"]
+        Graph["graphs/business_graph.py<br/>get_business_graph()"]
+        State["state/business_state.py<br/>BusinessState"]
+        Planner["nodes/business_planner.py"]
+        Fetcher["nodes/business_fetcher.py"]
+        Analyzer["nodes/business_analyzer.py"]
+        Reflector["nodes/business_reflector.py"]
+    end
+
+    subgraph ToolLayer["Tools + LLM"]
+        Tools["tools/business_tools.py<br/>get_business_metrics()"]
+        Prompt["prompts/business_prompt.py"]
+        OutSchema["schemas/business_analysis.py<br/>BusinessAnalysis"]
+        LLM["ai/llm.py get_llm()<br/>OpenAI gpt-4o-mini"]
+    end
+
+    subgraph DataLayer["Data"]
+        Repo["repositories/business_repository.py<br/>BusinessRepository"]
+        DB["MySQL<br/>sales / purchases / returns<br/>batches / sale_items"]
+    end
+
+    Client --> Router
+    Router -. validates .- Schemas
+    Router --> Service --> Graph
+    Graph -. typed state .- State
+    Graph --> Planner --> Fetcher --> Analyzer --> Reflector
+    Fetcher --> Tools --> Repo --> DB
+    Analyzer --> Prompt
+    Analyzer --> LLM
+    Analyzer -. structured output .- OutSchema
+    Reflector -->|"retry (conf<0.80)"| Fetcher
+    Reflector -->|finish| Service
+    Service --> Client
+
+    classDef http fill:#e3f2fd,stroke:#0d47a1,stroke-width:2px,color:#000;
+    classDef svc fill:#e8f5e9,stroke:#1b5e20,stroke-width:2px,color:#000;
+    classDef graph fill:#ede7f6,stroke:#4527a0,stroke-width:2px,color:#000;
+    classDef tool fill:#fff8e1,stroke:#f57f17,stroke-width:2px,color:#000;
+    classDef data fill:#fff3e0,stroke:#e65100,stroke-width:2px,color:#000;
+    class Router,Schemas http;
+    class Service svc;
+    class Graph,State,Planner,Fetcher,Analyzer,Reflector graph;
+    class Tools,Prompt,OutSchema,LLM tool;
+    class Repo,DB data;
+```
+
+## Business Intelligence Agent — Working (request -> response data flow)
+
+```mermaid
+sequenceDiagram
+    actor U as Client
+    participant R as routers/business.py
+    participant S as business_service.py
+    participant G as business_graph.py
+    participant P as business_planner.py
+    participant F as business_fetcher.py
+    participant T as business_tools.py
+    participant DB as business_repository.py -> MySQL
+    participant A as business_analyzer.py
+    participant L as LLM (get_llm)
+    participant RF as business_reflector.py
+
+    U->>R: POST /analyze {question:"How much profit?"}
+    R->>S: analyze(request)
+    S->>G: invoke({question})   (start timer)
+    G->>P: state
+    P-->>G: plan=[sales,purchases,returns,expiry,margin]
+    G->>F: state
+    F->>T: get_business_metrics(plan)
+    T->>DB: sales / purchase / return / expiry / margin summaries
+    DB-->>T: rows (revenue, cogs, expiry_loss, ...)
+    T-->>F: business_metrics {...}
+    F-->>G: state.business_metrics
+    G->>A: state
+    A->>L: system prompt + metrics (with_structured_output)
+    L-->>A: BusinessAnalysis{summary, insights, recs, confidence=0.85}
+    A-->>G: state.answer + state.confidence
+    G->>RF: state
+    alt confidence < 0.80
+        RF-->>G: retry=True -> back to Fetcher
+    else confidence >= 0.80
+        RF-->>G: retry=False -> END
+    end
+    G-->>S: final_state
+    S-->>R: BusinessAnalysisResponse{answer, confidence, exec_ms, version}
+    R-->>U: 200 OK JSON
+```
