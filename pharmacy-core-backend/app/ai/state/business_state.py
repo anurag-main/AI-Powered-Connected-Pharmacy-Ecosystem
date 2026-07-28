@@ -33,7 +33,9 @@ class BusinessState(TypedDict, total=False):
     # Reflection
     # ----------------------------
     reflection: str
+    reflection_count: int
     retry: bool
+    
 
     # ----------------------------
     # Errors
@@ -45,3 +47,6 @@ class BusinessState(TypedDict, total=False):
     # ----------------------------
     execution_time_ms: int
     agent_version: str
+    
+    
+    
