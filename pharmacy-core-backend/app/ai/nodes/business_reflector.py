@@ -30,6 +30,9 @@ def business_reflector(state: BusinessState) -> BusinessState:
 Business Question:
 {state["question"]}
 
+Already collected capabilities:
+{list((state.get("business_metrics") or {}).keys())}
+
 Collected Business Metrics:
 {state["business_metrics"]}
 
@@ -41,16 +44,20 @@ Business Analysis:
 
     result = structured_llm.invoke(messages)
     state["reflection_count"] = state.get("reflection_count", 0) + 1
-
-    # Store reflection result
-    state["retry"] = not result.sufficient
     state["reflection"] = result.reason
 
-    # Merge newly requested tasks while preserving order. Ignore any capability
-    # the LLM invented that we have no tool for, so an unknown task can't crash
-    # the next fetch.
-    for task in result.missing_tasks:
-        if task in TOOL_REGISTRY and task not in state["plan"]:
-            state["plan"].append(task)
+    # Keep only capabilities that are REAL (in the registry) and NOT already
+    # planned. Anything the LLM invented or already fetched is discarded.
+    new_tasks = [
+        task
+        for task in result.missing_tasks
+        if task in TOOL_REGISTRY and task not in state["plan"]
+    ]
+
+    # Retry ONLY when the reflector is unsatisfied AND there is genuinely new
+    # data to fetch. Looping to re-fetch identical data changes nothing, so an
+    # "insufficient" verdict with no new tasks finishes instead of spinning.
+    state["retry"] = (not result.sufficient) and bool(new_tasks)
+    state["plan"].extend(new_tasks)
 
     return state
