@@ -2,6 +2,8 @@
 
 import time
 
+from langchain_core.messages import HumanMessage
+
 from app.ai.graphs.business_graph import get_business_graph
 from app.schemas.business import (
     BusinessAnalysisRequest,
@@ -22,10 +24,21 @@ class BusinessService:
 
         start = time.perf_counter()
 
+        config = {
+            "configurable": {
+                "thread_id": request.thread_id,
+            }
+        }
+
         final_state = get_business_graph().invoke(
             {
-                "question": request.question,
-            }
+                "messages": [
+                    HumanMessage(
+                        content=request.question,
+                    )
+                ],
+            },
+            config=config,
         )
 
         elapsed_ms = int((time.perf_counter() - start) * 1000)
@@ -33,6 +46,12 @@ class BusinessService:
         return BusinessAnalysisResponse(
             answer=final_state["answer"],
             confidence=final_state["confidence"],
-            execution_time_ms=final_state.get("execution_time_ms", elapsed_ms),
-            agent_version=final_state.get("agent_version", "business-agent-v1"),
+            execution_time_ms=final_state.get(
+                "execution_time_ms",
+                elapsed_ms,
+            ),
+            agent_version=final_state.get(
+                "agent_version",
+                "business-agent-v1",
+            ),
         )
