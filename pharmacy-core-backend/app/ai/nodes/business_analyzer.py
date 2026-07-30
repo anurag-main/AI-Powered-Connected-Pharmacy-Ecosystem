@@ -1,14 +1,20 @@
 """LLM node for analyzing pharmacy business metrics."""
 
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.messages import (
+    HumanMessage,
+    SystemMessage,
+)
 
 from app.ai.llm import get_llm
 from app.ai.prompts.business_prompt import BUSINESS_SYSTEM_PROMPT
 from app.ai.schemas.business_analysis import BusinessAnalysis
 from app.ai.state.business_state import BusinessState
+from app.ai.utils.message_utils import get_latest_user_message
 
 
-def business_analyzer(state: BusinessState) -> BusinessState:
+def business_analyzer(
+    state: BusinessState,
+) -> BusinessState:
     """
     Analyze the collected business metrics using the LLM.
     """
@@ -17,24 +23,33 @@ def business_analyzer(state: BusinessState) -> BusinessState:
         BusinessAnalysis
     )
 
+    latest_question = get_latest_user_message(state)
+
     messages = [
         SystemMessage(
             content=BUSINESS_SYSTEM_PROMPT,
-        ),
+        )
+    ]
+
+    # Complete conversation history
+    messages.extend(state["messages"])
+
+    # Latest business context
+    messages.append(
         HumanMessage(
             content=f"""
 Business Question:
-{state["question"]}
+{latest_question}
 
 Business Metrics:
 {state["business_metrics"]}
 """
-        ),
-    ]
+        )
+    )
 
     result = structured_llm.invoke(messages)
 
-    state["answer"] = result.summary
-    state["confidence"] = result.confidence
-
-    return state
+    return {
+        "answer": result.summary,
+        "confidence": result.confidence,
+    }

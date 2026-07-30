@@ -1,17 +1,18 @@
 """Shared state for the Business Intelligence Agent."""
 
-from typing import TypedDict
+from langgraph.graph import MessagesState
 
 
-class BusinessState(TypedDict, total=False):
+class BusinessState(MessagesState):
     """
     Shared state passed between all Business Intelligence nodes.
-    """
 
-    # ----------------------------
-    # User Input
-    # ----------------------------
-    question: str
+    MessagesState provides:
+    - messages: list[AnyMessage]
+    - automatic message merging (add_messages reducer)
+
+    We extend it with our business-specific workflow state.
+    """
 
     # ----------------------------
     # Planner
@@ -35,7 +36,6 @@ class BusinessState(TypedDict, total=False):
     reflection: str
     reflection_count: int
     retry: bool
-    
 
     # ----------------------------
     # Errors
@@ -47,6 +47,3 @@ class BusinessState(TypedDict, total=False):
     # ----------------------------
     execution_time_ms: int
     agent_version: str
-    
-    
-    
