@@ -4,14 +4,12 @@ from app.ai.state.business_state import BusinessState
 from app.ai.tools.business_tools import get_business_metrics
 
 
-def business_fetcher(state: BusinessState) -> BusinessState:
+def business_fetcher(state: BusinessState) -> dict:
     """
     Execute the business plan by calling
     the required business tools.
     """
 
-    state["business_metrics"] = get_business_metrics(
-        state["plan"]
-    )
-
-    return state
+    return {
+        "business_metrics": get_business_metrics(state["plan"]),
+    }

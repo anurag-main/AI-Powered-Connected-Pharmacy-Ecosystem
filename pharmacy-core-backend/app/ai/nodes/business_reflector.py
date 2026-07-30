@@ -9,9 +9,10 @@ from app.ai.prompts.reflection_prompt import (
 from app.ai.schemas.reflection import ReflectionOutput
 from app.ai.state.business_state import BusinessState
 from app.ai.tools.business_tools import TOOL_REGISTRY
+from app.ai.utils.message_utils import get_latest_user_message
 
 
-def business_reflector(state: BusinessState) -> BusinessState:
+def business_reflector(state: BusinessState) -> dict:
     """
     Review the generated business analysis and determine
     whether additional business metrics are required.
@@ -21,6 +22,8 @@ def business_reflector(state: BusinessState) -> BusinessState:
         ReflectionOutput
     )
 
+    latest_question = get_latest_user_message(state)
+
     messages = [
         SystemMessage(
             content=REFLECTION_SYSTEM_PROMPT,
@@ -28,7 +31,7 @@ def business_reflector(state: BusinessState) -> BusinessState:
         HumanMessage(
             content=f"""
 Business Question:
-{state["question"]}
+{latest_question}
 
 Already collected capabilities:
 {list((state.get("business_metrics") or {}).keys())}
@@ -43,8 +46,6 @@ Business Analysis:
     ]
 
     result = structured_llm.invoke(messages)
-    state["reflection_count"] = state.get("reflection_count", 0) + 1
-    state["reflection"] = result.reason
 
     # Keep only capabilities that are REAL (in the registry) and NOT already
     # planned. Anything the LLM invented or already fetched is discarded.
@@ -54,10 +55,12 @@ Business Analysis:
         if task in TOOL_REGISTRY and task not in state["plan"]
     ]
 
-    # Retry ONLY when the reflector is unsatisfied AND there is genuinely new
-    # data to fetch. Looping to re-fetch identical data changes nothing, so an
-    # "insufficient" verdict with no new tasks finishes instead of spinning.
-    state["retry"] = (not result.sufficient) and bool(new_tasks)
-    state["plan"].extend(new_tasks)
-
-    return state
+    # Return a partial update (no mutation, no re-emitting messages). Retry ONLY
+    # when the reflector is unsatisfied AND there is genuinely new data to fetch;
+    # re-fetching identical data changes nothing.
+    return {
+        "reflection_count": state.get("reflection_count", 0) + 1,
+        "reflection": result.reason,
+        "retry": (not result.sufficient) and bool(new_tasks),
+        "plan": state["plan"] + new_tasks,
+    }
