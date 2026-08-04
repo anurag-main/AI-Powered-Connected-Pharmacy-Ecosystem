@@ -1,7 +1,7 @@
 """Shared state for the Business Intelligence Agent."""
 
 from langgraph.graph import MessagesState
-
+from app.ai.schemas.memory import MemoryFact
 
 class BusinessState(MessagesState):
     """
@@ -47,3 +47,5 @@ class BusinessState(MessagesState):
     # ----------------------------
     execution_time_ms: int
     agent_version: str
+    
+    memories: list[MemoryFact]
