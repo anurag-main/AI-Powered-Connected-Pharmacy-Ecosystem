@@ -34,6 +34,7 @@ Thumbs.db
 *.log
 *.sqlite
 *.db
+pharmacy-core-backend/memory_db/
 
 # ---------- Personal AI-coaching framework (kept local, not shared) ----------
 .claude/
