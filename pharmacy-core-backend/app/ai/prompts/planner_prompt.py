@@ -60,4 +60,19 @@ Guidelines:
 - Do not explain your reasoning.
 - Do not answer the user's question.
 - Return only the structured output.
+
+OUT-OF-DOMAIN QUESTIONS (IMPORTANT):
+If the question is NOT about the pharmacy's sales, purchases, returns,
+expiry, or profit/margin, you MUST return an EMPTY list of tasks. This
+includes small talk, greetings, jokes, weather, politics, general knowledge,
+or random/nonsensical text. Do NOT default to selecting any capability, and
+do NOT select all capabilities out of uncertainty — an empty list is the
+correct, deliberate answer when nothing applies.
+
+Examples that MUST return an empty task list:
+- "What's the weather today?"
+- "Tell me a joke about pharmacists."
+- "What do you think about the upcoming election?"
+- "asdkjqwe kqjwe 12312 !!! ???"
+- "Hi, how are you?"
 """

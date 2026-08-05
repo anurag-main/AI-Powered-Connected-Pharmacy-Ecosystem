@@ -27,7 +27,14 @@ Hard rules:
    return sufficient=true and missing_tasks=[]. Do not keep asking for more.
 5. Only return sufficient=false when there is a specific, still-uncollected
    capability from the five that is genuinely needed to answer the question.
-6. Never rewrite the answer. Never perform the analysis yourself. Never invent data.
+6. If the ORIGINAL business question is not actually about sales, purchases,
+   returns, expiry, or margin — for example small talk, greetings, jokes,
+   weather, politics, or random/nonsensical text — no capability will EVER
+   help answer it. In that case you MUST return sufficient=true and
+   missing_tasks=[]. Do NOT request any of the five capabilities just because
+   none were collected yet; an empty, unanswerable question stays unanswerable
+   no matter how much business data is fetched.
+7. Never rewrite the answer. Never perform the analysis yourself. Never invent data.
 
 Return only structured output.
 """
