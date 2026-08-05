@@ -22,6 +22,7 @@ class MemoryRepository:
     def save_memory(
         self,
         memory: MemoryFact,
+        thread_id: str,
     ) -> None:
         """
         Store a single memory in ChromaDB.
@@ -30,6 +31,7 @@ class MemoryRepository:
         document = Document(
             page_content=memory.fact,
             metadata={
+                "thread_id": thread_id,
                 "category": memory.category,
                 "confidence": memory.confidence,
             },
@@ -42,13 +44,18 @@ class MemoryRepository:
     def search_memories(
         self,
         query: str,
+        thread_id: str,
         k: int = 5,
     ) -> list[Document]:
         """
-        Retrieve the most relevant memories.
+        Retrieve the most relevant memories
+        for the current conversation thread.
         """
 
         return self.vector_store.similarity_search(
             query=query,
             k=k,
+            filter={
+                "thread_id": thread_id,
+            },
         )

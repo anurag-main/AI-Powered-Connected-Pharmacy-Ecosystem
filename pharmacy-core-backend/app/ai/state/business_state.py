@@ -2,7 +2,7 @@
 
 from langgraph.graph import MessagesState
 from app.ai.schemas.memory import MemoryFact
-
+from langchain_core.documents import Document
 class BusinessState(MessagesState):
     """
     Shared state passed between all Business Intelligence nodes.
@@ -49,3 +49,5 @@ class BusinessState(MessagesState):
     agent_version: str
     
     memories: list[MemoryFact]
+    
+    retrieved_memories: list[Document]
