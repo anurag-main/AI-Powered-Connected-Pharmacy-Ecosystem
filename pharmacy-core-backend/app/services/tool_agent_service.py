@@ -7,6 +7,7 @@ from langchain_core.messages import HumanMessage
 from app.ai.graphs.business_tool_graph import (
     get_business_tool_graph,
 )
+from app.ai.observability import ai_run
 from app.schemas.business import (
     BusinessAnalysisRequest,
     BusinessAnalysisResponse,
@@ -34,16 +35,17 @@ class ToolAgentService:
             }
         }
 
-        final_state = get_business_tool_graph().invoke(
-            {
-                "messages": [
-                    HumanMessage(
-                        content=request.question,
-                    )
-                ]
-            },
-            config=config,
-        )
+        with ai_run("tool-agent", thread_id=config["configurable"]["thread_id"]):
+            final_state = get_business_tool_graph().invoke(
+                {
+                    "messages": [
+                        HumanMessage(
+                            content=request.question,
+                        )
+                    ]
+                },
+                config=config,
+            )
 
         elapsed_ms = int(
             (time.perf_counter() - start) * 1000

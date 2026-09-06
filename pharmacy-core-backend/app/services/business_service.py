@@ -4,7 +4,8 @@ import time
 
 from langchain_core.messages import HumanMessage
 
-from app.ai.graphs.business_graph import get_business_graph
+from app.ai.graphs.business_graph import AGENT_NAME, get_business_graph
+from app.ai.observability import ai_run
 from app.schemas.business import (
     BusinessAnalysisRequest,
     BusinessAnalysisResponse,
@@ -30,16 +31,21 @@ class BusinessService:
             }
         }
 
-        final_state = get_business_graph().invoke(
-            {
-                "messages": [
-                    HumanMessage(
-                        content=request.question,
-                    )
-                ],
-            },
-            config=config,
-        )
+        # The service is where a run_id is minted: it owns exactly one graph
+        # invocation, which is precisely what a run is. The router above it handles
+        # many kinds of request, and the graph below it should not have to know it is
+        # being observed.
+        with ai_run(AGENT_NAME, thread_id=request.thread_id):
+            final_state = get_business_graph().invoke(
+                {
+                    "messages": [
+                        HumanMessage(
+                            content=request.question,
+                        )
+                    ],
+                },
+                config=config,
+            )
 
         elapsed_ms = int((time.perf_counter() - start) * 1000)
 

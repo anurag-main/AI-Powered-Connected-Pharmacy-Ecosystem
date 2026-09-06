@@ -5,6 +5,8 @@ from typing import Callable
 
 from langchain_core.tools import tool
 
+from app.ai.observability import observe_tool
+from app.core.context import bind_context
 from app.core.database import SessionLocal
 from app.repositories.business_repository import BusinessRepository
 
@@ -141,7 +143,8 @@ def execute_tool(task: str) -> tuple[str, dict]:
             f"Unknown business capability: {task}"
         )
 
-    result = tool_fn.invoke({})
+    with observe_tool(task):
+        result = tool_fn.invoke({})
 
     return task, result
 
@@ -166,11 +169,12 @@ def get_business_metrics(
         max_workers=max_workers,
     ) as executor:
 
+        # bind_context() captures this thread's correlation ids and replays them
+        # inside the worker. Without it the workers start with empty ContextVars
+        # and every tool log line from this fan-out would read request_id=- run_id=-,
+        # leaving the slowest part of the agent impossible to tie back to its request.
         future_to_task = {
-            executor.submit(
-                execute_tool,
-                task,
-            ): task
+            executor.submit(bind_context(execute_tool, task)): task
             for task in plan
         }
 

@@ -34,12 +34,16 @@ from app.ai.nodes.memory_persistor import (
 from app.ai.nodes.memory_retriever import (
     memory_retriever,
 )
+from app.ai.observability import observe_node
 from app.ai.schemas.memory import MemoryFact
 from app.ai.state.business_state import (
     BusinessState,
 )
 
 MAX_REFLECTIONS = 2
+
+# Identifies this agent in every log line it produces.
+AGENT_NAME = "business"
 
 # The `memories` field on BusinessState holds MemoryFact (Pydantic) objects,
 # and MemorySaver checkpoints that state via msgpack. Without registering the
@@ -81,42 +85,42 @@ def get_business_graph():
 
     graph.add_node(
         "memory_retriever",
-        memory_retriever,
+        observe_node("memory_retriever", agent=AGENT_NAME)(memory_retriever),
     )
 
     graph.add_node(
         "planner",
-        business_planner,
+        observe_node("planner", agent=AGENT_NAME)(business_planner),
     )
 
     graph.add_node(
         "fetcher",
-        business_fetcher,
+        observe_node("fetcher", agent=AGENT_NAME)(business_fetcher),
     )
 
     graph.add_node(
         "analyzer",
-        business_analyzer,
+        observe_node("analyzer", agent=AGENT_NAME)(business_analyzer),
     )
 
     graph.add_node(
         "reflector",
-        business_reflector,
+        observe_node("reflector", agent=AGENT_NAME)(business_reflector),
     )
 
     graph.add_node(
         "finalizer",
-        business_finalizer,
+        observe_node("finalizer", agent=AGENT_NAME)(business_finalizer),
     )
 
     graph.add_node(
         "memory_extractor",
-        memory_extractor,
+        observe_node("memory_extractor", agent=AGENT_NAME)(memory_extractor),
     )
 
     graph.add_node(
         "memory_persistor",
-        memory_persistor,
+        observe_node("memory_persistor", agent=AGENT_NAME)(memory_persistor),
     )
 
     # -----------------------------------------------------

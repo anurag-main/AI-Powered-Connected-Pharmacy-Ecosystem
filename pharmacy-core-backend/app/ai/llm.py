@@ -6,6 +6,7 @@ Every node calls this; never construct chat clients elsewhere.
 Both clients inherit from BaseChatModel — same .invoke(), .with_structured_output(),
 .bind_tools() surface. Node code stays provider-agnostic.
 """
+import logging
 from functools import lru_cache
 
 from langchain_core.language_models.chat_models import BaseChatModel
@@ -18,6 +19,20 @@ from app.ai.config import (
     REQUEST_TIMEOUT_SECONDS,
     TEMPERATURE,
 )
+
+logger = logging.getLogger("app.ai.llm")
+
+
+def _observability_callbacks() -> list:
+    """The callback handlers attached to every client this factory builds.
+
+    Imported lazily so `app.ai.observability` — which pulls in langchain_core's
+    callback machinery — is not required merely to read this module.
+    """
+
+    from app.ai.observability import LLMObservabilityHandler
+
+    return [LLMObservabilityHandler()]
 
 
 def _is_placeholder(value: str) -> bool:
@@ -42,6 +57,7 @@ def _build_nvidia_client() -> BaseChatModel:
         model=MODEL_NAME,
         api_key=NVIDIA_API_KEY,
         temperature=TEMPERATURE,
+        callbacks=_observability_callbacks(),
         # ChatNVIDIA accepts max_tokens but not a `timeout` kwarg — the underlying
         # HTTP client handles connection timeouts via NVIDIA_API_BASE retry settings.
     )
@@ -61,6 +77,9 @@ def _build_openai_client() -> BaseChatModel:
         api_key=OPENAI_API_KEY,
         temperature=TEMPERATURE,
         timeout=REQUEST_TIMEOUT_SECONDS,
+        # Attached at construction so EVERY call through this client is timed and has
+        # its token usage recorded, without any node opting in.
+        callbacks=_observability_callbacks(),
     )
 
 
@@ -73,9 +92,21 @@ def get_llm() -> BaseChatModel:
     so every downstream node is provider-agnostic.
     """
     if LLM_PROVIDER == "nvidia":
-        return _build_nvidia_client()
-    if LLM_PROVIDER == "openai":
-        return _build_openai_client()
+        client = _build_nvidia_client()
+    elif LLM_PROVIDER == "openai":
+        client = _build_openai_client()
+    else:
+        client = None
+
+    if client is not None:
+        # Logged once (the factory is lru_cached) so a run's logs record which model
+        # actually answered — the first question asked when output changes unexpectedly.
+        logger.info(
+            "llm_client_created",
+            extra={"provider": LLM_PROVIDER, "model": MODEL_NAME},
+        )
+        return client
+
     raise RuntimeError(
         f"Unknown LLM_PROVIDER: {LLM_PROVIDER!r}. "
         f"Must be 'nvidia' or 'openai' (case-insensitive)."

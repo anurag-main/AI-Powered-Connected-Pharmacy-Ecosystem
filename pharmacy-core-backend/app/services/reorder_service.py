@@ -10,6 +10,7 @@ logic (the graph IS the engine). It's the seam where future cross-cutting rules
 (auth, rate limit, caching the nightly run) will land without touching router/graph.
 """
 from app.ai.graphs.reorder_graph import get_reorder_graph
+from app.ai.observability import ai_run
 from app.core.database import SessionLocal
 from app.repositories.sqlalchemy_reorder_request_repository import (
     SQLAlchemyReorderRequestRepository,
@@ -30,7 +31,8 @@ class ReorderService:
         The graph pulls its own data (invoke with empty state). Proposals may be
         empty — that's a valid result meaning "nothing needs reordering".
         """
-        final_state = get_reorder_graph().invoke({})
+        with ai_run("reorder"):
+            final_state = get_reorder_graph().invoke({})
 
         # ReorderProposal ignores extra keys, so we can hand it the raw dicts.
         proposals = [ReorderProposal(**p) for p in final_state.get("proposals", [])]
