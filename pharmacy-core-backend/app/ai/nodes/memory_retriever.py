@@ -13,7 +13,23 @@ from app.ai.utils.message_utils import (
 )
 
 
-repository = MemoryRepository()
+# Built on first use, not at import time. Constructing MemoryRepository opens the
+# ChromaDB client, so doing it at import meant merely importing this module (or any
+# graph containing it) touched the on-disk vector store. Lazy construction keeps the
+# runtime behaviour identical — same single shared instance — while letting callers
+# that never run this node avoid the side effect entirely.
+_repository: MemoryRepository | None = None
+
+
+def get_repository() -> MemoryRepository:
+    """Return the shared MemoryRepository, creating it on first use."""
+
+    global _repository
+
+    if _repository is None:
+        _repository = MemoryRepository()
+
+    return _repository
 
 
 def memory_retriever(
@@ -31,7 +47,7 @@ def memory_retriever(
         state,
     )
 
-    retrieved_memories = repository.search_memories(
+    retrieved_memories = get_repository().search_memories(
         query=latest_question,
         thread_id=thread_id,
         k=5,

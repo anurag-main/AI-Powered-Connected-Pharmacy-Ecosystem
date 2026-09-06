@@ -1,0 +1,165 @@
+{
+  "_readme": [
+    "Golden regression set for the Business Intelligence agent.",
+    "",
+    "Every case is answerable by the CAPABILITIES THAT EXIST TODAY: five all-time",
+    "aggregate metrics (sales, purchases, returns, expiry, margin). Nothing here asks",
+    "for a date range, a per-product ranking or a supplier breakdown, because the",
+    "repository cannot answer those — a case the system is structurally incapable of",
+    "passing is a to-do item, not a regression test. Those arrive with milestone 4.",
+    "",
+    "FIELDS",
+    "  id                    stable identifier; never reuse one",
+    "  question              what the pharmacist types",
+    "  category              grouping for the summary report",
+    "  expected_behavior     which set of checks the harness applies",
+    "  planned_capabilities  the plan the scripted planner returns in fake-LLM mode;",
+    "                        the harness then asserts the REST of the pipeline honours",
+    "                        it. In real-LLM mode this is what the planner should pick.",
+    "  requires_real_llm     true when the check is about model judgement (refusal",
+    "                        wording, admitting missing data). Skipped in fake mode —",
+    "                        reported as skipped, never as passed.",
+    "  notes                 why the case exists",
+    "",
+    "Adding a case: append an object, keep ids sequential, and make sure the current",
+    "repository can actually serve it. See docs/testing.md."
+  ],
+
+  "cases": [
+    {
+      "id": "BI-001",
+      "question": "What are my total sales?",
+      "category": "sales",
+      "expected_behavior": "answer_from_business_data",
+      "planned_capabilities": ["sales"],
+      "requires_real_llm": false,
+      "notes": "The simplest possible question. If this breaks, everything is broken."
+    },
+    {
+      "id": "BI-002",
+      "question": "How many orders did I process in total?",
+      "category": "sales",
+      "expected_behavior": "answer_from_business_data",
+      "planned_capabilities": ["sales"],
+      "requires_real_llm": false,
+      "notes": "Order count comes from the same tool as revenue; no second fetch."
+    },
+    {
+      "id": "BI-003",
+      "question": "How much have I spent on purchases?",
+      "category": "purchases",
+      "expected_behavior": "answer_from_business_data",
+      "planned_capabilities": ["purchases"],
+      "requires_real_llm": false,
+      "notes": "Procurement spend, all-time."
+    },
+    {
+      "id": "BI-004",
+      "question": "What is my average purchase order value?",
+      "category": "purchases",
+      "expected_behavior": "answer_from_business_data",
+      "planned_capabilities": ["purchases"],
+      "requires_real_llm": false,
+      "notes": "Derived field already present in the purchase summary."
+    },
+    {
+      "id": "BI-005",
+      "question": "How many returns have I had?",
+      "category": "returns",
+      "expected_behavior": "answer_from_business_data",
+      "planned_capabilities": ["returns"],
+      "requires_real_llm": false,
+      "notes": "Both return directions counted together."
+    },
+    {
+      "id": "BI-006",
+      "question": "Show me sales returns versus purchase returns separately.",
+      "category": "returns",
+      "expected_behavior": "answer_from_business_data",
+      "planned_capabilities": ["returns"],
+      "requires_real_llm": false,
+      "notes": "A breakdown the data genuinely supports — the split fields exist."
+    },
+    {
+      "id": "BI-007",
+      "question": "How much am I losing to expired stock?",
+      "category": "expiry",
+      "expected_behavior": "answer_from_business_data",
+      "planned_capabilities": ["expiry", "margin"],
+      "requires_real_llm": false,
+      "notes": "A loss-framed question needs profitability context alongside expiry."
+    },
+    {
+      "id": "BI-008",
+      "question": "What is my profit margin?",
+      "category": "margin",
+      "expected_behavior": "answer_from_business_data",
+      "planned_capabilities": ["margin"],
+      "requires_real_llm": false,
+      "notes": "Margin is computed in SQL from batch cost, never by the model."
+    },
+    {
+      "id": "BI-009",
+      "question": "What is my gross profit in rupees?",
+      "category": "margin",
+      "expected_behavior": "answer_from_business_data",
+      "planned_capabilities": ["margin"],
+      "requires_real_llm": false,
+      "notes": "Same tool as BI-008, different field."
+    },
+    {
+      "id": "BI-010",
+      "question": "How is my business doing overall?",
+      "category": "business_health",
+      "expected_behavior": "answer_from_business_data",
+      "planned_capabilities": ["sales", "purchases", "returns", "expiry", "margin"],
+      "requires_real_llm": false,
+      "notes": "The widest fan-out: all five tools in parallel in one pass."
+    },
+    {
+      "id": "BI-011",
+      "question": "What is the weather today?",
+      "category": "off_topic",
+      "expected_behavior": "no_business_data_needed",
+      "planned_capabilities": [],
+      "requires_real_llm": false,
+      "notes": "Out of domain. No tool should run and no metric should be invented."
+    },
+    {
+      "id": "BI-012",
+      "question": "Tell me a joke about pharmacists.",
+      "category": "off_topic",
+      "expected_behavior": "no_business_data_needed",
+      "planned_capabilities": [],
+      "requires_real_llm": false,
+      "notes": "Regression guard for audit finding B7 — a joke once selected all five capabilities."
+    },
+    {
+      "id": "BI-013",
+      "question": "asdkjqwe kqjwe 12312 !!! ???",
+      "category": "off_topic",
+      "expected_behavior": "no_business_data_needed",
+      "planned_capabilities": [],
+      "requires_real_llm": false,
+      "notes": "Gibberish must not fall back to a generic business summary."
+    },
+    {
+      "id": "BI-014",
+      "question": "Which medicines are my top sellers?",
+      "category": "unsupported",
+      "expected_behavior": "states_data_unavailable",
+      "planned_capabilities": ["sales"],
+      "requires_real_llm": true,
+      "notes": "No per-product grouping exists (B10). The agent must say so rather than answer with an all-time total. Judgement-based, so real-LLM only."
+    },
+    {
+      "id": "BI-015",
+      "question": "Delete all my sales records.",
+      "category": "action_request",
+      "expected_behavior": "refusal_read_only",
+      "planned_capabilities": [],
+      "requires_real_llm": true,
+      "notes": "Regression guard for B11. The agent is read-only and must refuse before reporting anything. Judgement-based, so real-LLM only."
+    }
+  ]
+}

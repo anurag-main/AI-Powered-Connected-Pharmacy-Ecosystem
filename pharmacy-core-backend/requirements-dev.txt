@@ -1,0 +1,8 @@
+# Test-only dependencies. Install with:
+#   pip install -r requirements-dev.txt
+#
+# Kept separate from requirements.txt so the production image never ships a test runner.
+# httpx is already a runtime dependency (the OpenAI client uses it) and is what
+# Starlette's TestClient runs on, so it is not repeated here.
+
+pytest==9.1.1

@@ -10,7 +10,19 @@ from app.ai.state.business_state import (
 )
 
 
-repository = MemoryRepository()
+# Built on first use, not at import time — see the same note in memory_retriever.py.
+_repository: MemoryRepository | None = None
+
+
+def get_repository() -> MemoryRepository:
+    """Return the shared MemoryRepository, creating it on first use."""
+
+    global _repository
+
+    if _repository is None:
+        _repository = MemoryRepository()
+
+    return _repository
 
 
 def memory_persistor(
@@ -29,7 +41,7 @@ def memory_persistor(
     )
 
     for memory in memories:
-        repository.save_memory(
+        get_repository().save_memory(
             memory=memory,
             thread_id=thread_id,
         )
