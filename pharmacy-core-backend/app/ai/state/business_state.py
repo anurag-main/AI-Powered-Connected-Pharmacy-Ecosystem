@@ -1,53 +1,58 @@
-"""Shared state for the Business Intelligence Agent."""
+"""Shared state for the Business Intelligence Agent.
 
-from langgraph.graph import MessagesState
-from app.ai.schemas.memory import MemoryFact
+Every field here is written by at least one node and read by at least one other.
+That is the bar: state is the contract between nodes, and a field nobody writes is
+worse than no field — it reads like a promise and silently supplies a default.
+
+Removed in milestone 3 after a repository-wide search confirmed no writer:
+
+  ``errors``             declared ``list[str]``, never appended to, and without a
+                         reducer it would have overwritten rather than accumulated
+                         had two nodes ever tried. Per-query failures already travel
+                         inside ``business_metrics`` as ``{"error": ...}`` entries,
+                         which is where the analyzer actually looks.
+  ``execution_time_ms``  no node set it; the service measures the wall clock itself.
+  ``agent_version``      no node set it; it is a property of the deployed graph, not
+                         of one run, and now lives as ``AGENT_VERSION`` in
+                         ``app.ai.graphs.business_graph``.
+
+The API still returns ``execution_time_ms`` and ``agent_version`` — they moved from
+dead state to real values computed where the information actually exists.
+"""
+
 from langchain_core.documents import Document
+from langgraph.graph import MessagesState
+
+from app.ai.schemas.business_query import BusinessQuery
+from app.ai.schemas.memory import MemoryFact
+
+
 class BusinessState(MessagesState):
-    """
-    Shared state passed between all Business Intelligence nodes.
+    """State passed between all Business Intelligence nodes.
 
-    MessagesState provides:
-    - messages: list[AnyMessage]
-    - automatic message merging (add_messages reducer)
-
-    We extend it with our business-specific workflow state.
+    ``MessagesState`` supplies ``messages`` plus the ``add_messages`` reducer.
     """
 
-    # ----------------------------
-    # Planner
-    # ----------------------------
-    plan: list[str]
+    # -- planner ---------------------------------------------------------
+    # Validated queries, not capability names. The planner decides WHAT to ask;
+    # the objects carry metric, dimension, period, sort and limit together so a
+    # downstream node can never lose half the question.
+    plan: list[BusinessQuery]
 
-    # ----------------------------
-    # Data collected from tools
-    # ----------------------------
+    # -- fetcher ---------------------------------------------------------
+    # Keyed by BusinessQuery.key(), so "sales" and "sales by product last month"
+    # coexist instead of one overwriting the other.
     business_metrics: dict
 
-    # ----------------------------
-    # AI Analysis
-    # ----------------------------
+    # -- analyzer --------------------------------------------------------
     answer: str
     confidence: float
 
-    # ----------------------------
-    # Reflection
-    # ----------------------------
+    # -- reflector -------------------------------------------------------
     reflection: str
     reflection_count: int
     retry: bool
 
-    # ----------------------------
-    # Errors
-    # ----------------------------
-    errors: list[str]
-
-    # ----------------------------
-    # Future (Observability)
-    # ----------------------------
-    execution_time_ms: int
-    agent_version: str
-    
+    # -- memory ----------------------------------------------------------
     memories: list[MemoryFact]
-    
     retrieved_memories: list[Document]

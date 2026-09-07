@@ -23,8 +23,9 @@ from typing import Any, Callable
 from langchain_core.documents import Document
 
 from app.ai.schemas.business_analysis import BusinessAnalysis
+from app.ai.memory.memory_policy import normalize_fact
 from app.ai.schemas.memory import MemoryExtraction
-from app.ai.schemas.planner import PlannerOutput
+from app.ai.schemas.business_query import BusinessQuery, Metric, PlannerOutput
 from app.ai.schemas.reflection import ReflectionOutput
 
 # A scripted response is either a ready-made object or a callable that receives the
@@ -115,15 +116,20 @@ class _StructuredFakeLLM:
 # ---------------------------------------------------------------------------
 
 
-def default_responses(plan: list[str] | None = None) -> dict[type, Response]:
+def default_responses(
+    queries: list[BusinessQuery] | None = None,
+) -> dict[type, Response]:
     """A working script for every BI node: plan → analyze → reflect → extract.
 
     Tests override only the entry they care about, so a planner test does not have
-    to describe an analysis it never inspects.
+    to describe an analysis it never inspects. The default plan is a single overall
+    sales query — the simplest thing the pipeline can be asked to do.
     """
 
+    plan = queries if queries is not None else [BusinessQuery(metric=Metric.SALES)]
+
     return {
-        PlannerOutput: PlannerOutput(tasks=list(plan if plan is not None else ["sales"])),
+        PlannerOutput: PlannerOutput(queries=list(plan)),
         BusinessAnalysis: BusinessAnalysis(
             summary="Total sales are 30.00 across 2 orders.",
             key_insights=[],
@@ -134,8 +140,8 @@ def default_responses(plan: list[str] | None = None) -> dict[type, Response]:
         # normal path. Tests that exercise the loop override this.
         ReflectionOutput: ReflectionOutput(
             sufficient=True,
-            missing_tasks=[],
-            reason="All requested metrics were retrieved.",
+            missing_queries=[],
+            reason="All requested data was retrieved.",
         ),
         MemoryExtraction: MemoryExtraction(memories=[]),
     }
@@ -150,29 +156,40 @@ def default_responses(plan: list[str] | None = None) -> dict[type, Response]:
 class FakeMemoryRepository:
     """In-memory stand-in for the ChromaDB-backed ``MemoryRepository``.
 
-    Reproduces the behaviour that matters for tests, including the thread_id filter
-    on both write and read — the filter is the subject of a known-gap test, so the
-    fake must not quietly "fix" it.
+    Reproduces the behaviour that matters: scope filtering on BOTH write and read.
+    Scope isolation is the property under test, so the fake must enforce it exactly
+    as the real store does rather than quietly returning everything.
     """
 
     documents: list[Document] = field(default_factory=list)
 
-    def save_memory(self, memory, thread_id: str) -> None:
+    def save_memory(self, memory, scope) -> None:
         self.documents.append(
             Document(
                 page_content=memory.fact,
                 metadata={
-                    "thread_id": thread_id,
+                    **scope.as_metadata(),
                     "category": memory.category,
                     "confidence": memory.confidence,
+                    "normalized": normalize_fact(memory.fact),
                 },
             )
         )
 
-    def search_memories(self, query: str, thread_id: str, k: int = 5) -> list[Document]:
-        # No embeddings in tests: return everything tagged with this thread, newest
-        # last, capped at k. Relevance ranking is Chroma's job and is not under test.
-        matches = [
-            doc for doc in self.documents if doc.metadata.get("thread_id") == thread_id
+    def search_memories(self, query: str, scope, k: int = 5) -> list[Document]:
+        # No embeddings in tests: return everything in this scope, capped at k.
+        # Relevance ranking is Chroma's job and is not what these tests exercise.
+        return self._in_scope(scope)[:k]
+
+    def existing_normalized_facts(self, scope) -> set[str]:
+        return {
+            doc.metadata.get("normalized", "") for doc in self._in_scope(scope)
+        }
+
+    def _in_scope(self, scope) -> list[Document]:
+        wanted = scope.as_filter()
+        return [
+            doc
+            for doc in self.documents
+            if all(doc.metadata.get(key) == value for key, value in wanted.items())
         ]
-        return matches[:k]

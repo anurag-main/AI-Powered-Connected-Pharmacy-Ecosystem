@@ -16,7 +16,7 @@ from langchain_core.messages import AIMessage, HumanMessage
 from app.ai.graphs.business_graph import MAX_REFLECTIONS, get_business_graph
 from app.ai.schemas.business_analysis import BusinessAnalysis
 from app.ai.schemas.memory import MemoryExtraction, MemoryFact
-from app.ai.schemas.planner import PlannerOutput
+from app.ai.schemas.business_query import BusinessQuery, Dimension, Metric, PlannerOutput
 from app.ai.schemas.reflection import ReflectionOutput
 from tests.factories import EXPECTED
 
@@ -38,7 +38,7 @@ def run_graph(question: str, thread_id: str) -> dict:
 def test_a_sales_question_completes_and_answers(seeded_app_db, fake_llm, thread_id):
     state = run_graph("What were total sales?", thread_id)
 
-    assert state["plan"] == ["sales"]
+    assert [q.metric.value for q in state["plan"]] == ["sales"]
     assert state["business_metrics"]["sales"]["total_sales"] == (
         EXPECTED["sales"]["total_sales"]
     )
@@ -55,11 +55,11 @@ def test_the_plan_and_the_fetched_metrics_stay_in_step(
     someone changes the plan format on one side only.
     """
 
-    fake_llm.responses[PlannerOutput] = PlannerOutput(tasks=["sales", "margin", "expiry"])
+    fake_llm.responses[PlannerOutput] = PlannerOutput(queries=[BusinessQuery(metric=Metric.SALES), BusinessQuery(metric=Metric.MARGIN), BusinessQuery(metric=Metric.EXPIRY)])
 
     state = run_graph("How healthy is the business?", thread_id)
 
-    assert set(state["business_metrics"]) == set(state["plan"])
+    assert set(state["business_metrics"]) == {q.key() for q in state["plan"]}
 
 
 def test_the_answer_is_recorded_once_in_the_transcript(
@@ -108,7 +108,7 @@ def test_an_off_topic_question_fetches_no_business_data(
     real-LLM mode.
     """
 
-    fake_llm.responses[PlannerOutput] = PlannerOutput(tasks=[])
+    fake_llm.responses[PlannerOutput] = PlannerOutput(queries=[])
 
     state = run_graph("What is the capital of France?", thread_id)
 
@@ -131,11 +131,11 @@ def test_reflection_fetches_the_missing_capability_and_then_finishes(
         [
             ReflectionOutput(
                 sufficient=False,
-                missing_tasks=["margin"],
+                missing_queries=[BusinessQuery(metric=Metric.MARGIN)],
                 reason="Profitability needs cost data.",
             ),
             ReflectionOutput(
-                sufficient=True, missing_tasks=[], reason="Complete."
+                sufficient=True, missing_queries=[], reason="Complete."
             ),
         ]
     )
@@ -143,7 +143,7 @@ def test_reflection_fetches_the_missing_capability_and_then_finishes(
 
     state = run_graph("Is my business profitable?", thread_id)
 
-    assert set(state["plan"]) == {"sales", "margin"}
+    assert {q.metric.value for q in state["plan"]} == {"sales", "margin"}
     assert set(state["business_metrics"]) == {"sales", "margin"}
     assert state["reflection_count"] == 2
 
@@ -157,7 +157,12 @@ def test_a_permanently_unsatisfied_reflector_still_terminates(
     def never_satisfied(_messages):
         return ReflectionOutput(
             sufficient=False,
-            missing_tasks=["margin", "expiry", "returns", "purchases"],
+            missing_queries=[
+                BusinessQuery(metric=Metric.MARGIN),
+                BusinessQuery(metric=Metric.EXPIRY),
+                BusinessQuery(metric=Metric.RETURNS),
+                BusinessQuery(metric=Metric.PURCHASES),
+            ],
             reason="Still not enough.",
         )
 
@@ -241,10 +246,10 @@ def test_a_database_outage_yields_error_metrics_not_a_crash(
 
     from app.ai.tools import business_tools
 
-    def dead(_task: str):
+    def dead(query, **kwargs):
         raise RuntimeError("database is down")
 
-    monkeypatch.setattr(business_tools, "execute_tool", dead)
+    monkeypatch.setattr(business_tools, "execute_business_query", dead)
 
     state = run_graph("What were total sales?", thread_id)
 

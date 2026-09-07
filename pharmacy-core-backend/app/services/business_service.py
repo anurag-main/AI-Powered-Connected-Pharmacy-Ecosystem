@@ -4,7 +4,7 @@ import time
 
 from langchain_core.messages import HumanMessage
 
-from app.ai.graphs.business_graph import AGENT_NAME, get_business_graph
+from app.ai.graphs.business_graph import AGENT_NAME, AGENT_VERSION, get_business_graph
 from app.ai.observability import ai_run
 from app.schemas.business import (
     BusinessAnalysisRequest,
@@ -49,15 +49,13 @@ class BusinessService:
 
         elapsed_ms = int((time.perf_counter() - start) * 1000)
 
+        # Both fields used to be read out of graph state with a fallback, and no
+        # node ever wrote either — so the fallback was always what shipped. They are
+        # now computed where the information actually exists: the elapsed time here,
+        # the version alongside the graph it describes.
         return BusinessAnalysisResponse(
             answer=final_state["answer"],
             confidence=final_state["confidence"],
-            execution_time_ms=final_state.get(
-                "execution_time_ms",
-                elapsed_ms,
-            ),
-            agent_version=final_state.get(
-                "agent_version",
-                "business-agent-v1",
-            ),
+            execution_time_ms=elapsed_ms,
+            agent_version=AGENT_VERSION,
         )

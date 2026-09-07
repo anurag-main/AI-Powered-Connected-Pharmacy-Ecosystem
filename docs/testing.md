@@ -95,8 +95,9 @@ work.
 
 `fake_memory` **is** autouse. The cost of forgetting it is that a test writes junk into the
 developer's real ChromaDB store at `memory_db/` and bills real embedding calls to do it.
-`FakeMemoryRepository` reproduces the real `thread_id` filter on both read and write — the
-filter is the subject of a known-gap test, so the fake must not quietly "fix" it.
+`FakeMemoryRepository` enforces `MemoryScope` filtering on both read **and** write, exactly
+as the real store does — scope isolation is the property under test, so a fake that quietly
+returned everything would make those tests meaningless.
 
 ---
 
@@ -118,29 +119,38 @@ Fixtures: `db_session` (raw session) · `seeded_db` (scenario loaded) · `seeded
 
 ## The golden set
 
-`tests/evaluation/golden_cases.json` — 15 cases across sales, purchases, returns, expiry,
-margin, business health, off-topic, unsupported and action-request.
+`tests/evaluation/golden_cases.json` — 33 cases across sales, purchases, returns, expiry,
+margin, business health, date filtering, ranking, grouping, combined queries, off-topic,
+unsupported and action-request.
 
 **What it measures, and what it does not.** In the default fake-LLM mode the planner is
-*scripted* from each case's `planned_capabilities`. The harness therefore does not grade
-the model's routing — it grades the pipeline around it:
+*scripted* from each case's `planned_queries`. The harness therefore does not grade the
+model's routing — it grades the pipeline around it:
 
-- the plan is honoured by the fetcher (`set(metrics) == set(plan)`)
-- no tool silently failed
+- the plan is honoured by the fetcher, key for key
+- no query silently failed
+- **every result carries the period it covers** — the hole that let an all-time total be
+  reported as "last month"
 - an answer exists, with confidence in `[0, 1]`
 - the reflection loop stayed inside `MAX_REFLECTIONS`
 
+Period cases are graded on whether the period was applied and reported, **not** on which
+rows came back: the seeded scenario sits at fixed dates, so asserting row contents would
+tie the suite to the calendar. Date-boundary values are asserted against explicit ranges in
+`tests/unit/test_business_repository.py` instead.
+
 That is a real regression suite for the graph, and it is honest about not being a model-
 quality benchmark. `--real` grades the planner's own routing against
-`planned_capabilities`.
+`planned_queries`.
 
 Cases marked `requires_real_llm` depend on model judgement — refusing an action, admitting
 missing data. They are **skipped** in fake mode and reported as skipped, never counted as
 passes.
 
-Every case must be answerable by the capabilities that exist **today**. A case demanding
-date filtering or per-product ranking would fail forever and train everyone to ignore a red
-suite; `test_no_case_asks_for_a_capability_that_does_not_exist` enforces this.
+Every case must be answerable by the capabilities that exist **today**. A case demanding a
+category breakdown would fail forever and train everyone to ignore a red suite;
+`test_every_planned_query_is_valid` enforces this by constructing each case's queries
+through the same `BusinessQuery` validation the planner faces.
 
 There is deliberately **no LLM-as-judge yet**. Deterministic checks first; a judge is worth
 adding once there is something it can grade that these checks cannot.
@@ -150,7 +160,8 @@ adding once there is something it can grade that these checks cannot.
 1. Append to the `cases` array in `golden_cases.json`; keep ids sequential, never reuse one.
 2. Confirm the current repository can actually serve it.
 3. Set `expected_behavior` to `answer_from_business_data` or `no_business_data_needed`; if
-   the check is about model judgement, set `requires_real_llm: true`.
+   the check is about model judgement (refusal wording, admitting missing data), set
+   `requires_real_llm: true`.
 4. Run `pytest tests/evaluation`.
 
 A new `expected_behavior` value needs a matching branch in `runner.check_state`.
@@ -174,8 +185,14 @@ This keeps the suite green while making the defect impossible to forget: fixing 
 that test red, and the failure message says exactly what to do. Run `pytest -m known_gap`
 to list them.
 
-Currently pinned: **B1** thread-scoped memory · **B3** no date filtering · **B4** no memory
-confidence gate · **B10** no grouping/ranking · dead `agent_version` state field.
+Milestone 3 cleared most of these. **B3** (date filtering), **B4** (confidence gate),
+**B5** (deduplication), **B10** (grouping/ranking) and the dead `agent_version` field are
+fixed, and each gap test was replaced by a test of the new behaviour rather than deleted.
+**B1** was reinterpreted as a guarantee — thread isolation is now asserted, not pinned as a
+defect; see `docs/business_queries.md`.
+
+Currently pinned: no `category` dimension (needs a schema change) · semantic paraphrase is
+not deduplicated (needs embeddings).
 
 ---
 
@@ -187,10 +204,11 @@ tests/
 ├── conftest.py              fixtures: engine, clean_database, db_session, fake_llm, client
 ├── fakes.py                 FakeLLM, FakeMemoryRepository
 ├── factories.py             the fixed scenario + EXPECTED figures
-├── unit/                    104 tests — repository, tools, nodes, reorder maths,
-│                                       correlation context, tracing config
-├── integration/             49 tests — full graph, HTTP endpoint, observability chain
-└── evaluation/              16 tests — golden set + harness self-checks
+├── unit/                    301 tests — repository, business query validation, period
+│                                       resolution, tools, nodes, memory policy, reorder
+│                                       maths, correlation context, tracing config
+├── integration/             50 tests — full graph, HTTP endpoint, observability chain
+└── evaluation/              37 tests — golden set + harness self-checks
     ├── golden_cases.json
     ├── runner.py            also runnable as `python -m tests.evaluation.runner`
     └── test_bi_golden_cases.py
@@ -222,6 +240,7 @@ strings, so a formatter tweak does not fail a behavioural test.
 | Migrations are untested | Schema is built from `Base.metadata`. Testing the Alembic chain properly needs a MySQL container — belongs with the Docker milestone |
 | SQLite is not MySQL | No coverage of MySQL-specific behaviour (`CHECK` enforcement, collation, `(CURRENT_DATE)` defaults). A small MySQL-backed suite belongs with Docker |
 | Billing and reorder graphs untested | Only `reorder_tools` maths is covered. Both agents work and are lower-priority per the roadmap |
+| `strftime` in time breakdowns is SQLite-specific | Passes on SQLite; MySQL needs `date_format`. The one dialect-aware call, and the first thing to check when a MySQL-backed suite lands |
 | Native tool-calling graph untested | `FakeLLM.bind_tools` intentionally raises; add binding support when that graph is covered |
 | No coverage measurement | `pytest-cov` not added — a number nobody acts on is not worth a dependency yet |
 | `StarletteDeprecationWarning` from `TestClient` | Starlette wants `httpx2`; harmless, revisit on the next dependency bump |

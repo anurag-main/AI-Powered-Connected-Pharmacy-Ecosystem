@@ -559,7 +559,8 @@ c:\ai-pharmacy-ecosystem/
 │   ├── 04_bi_agent_qa_report.md    # 42-case QA report on the BI agent
 │   ├── 05_architecture_audit.md    # repo-wide audit vs the 15 LPA roadmap + execution plan
 │   ├── testing.md                  # test + evaluation foundation: how to run, extend, and read it
-│   └── observability.md            # request_id / thread_id / run_id, log events, LangSmith setup
+│   ├── observability.md            # request_id / thread_id / run_id, log events, LangSmith setup
+│   └── business_queries.md         # structured queries, date semantics, memory scope + policy
 ├── agents/   hooks/   skills/   .claude/commands/   # Claude Code workflow config
 │
 ├── pharmacy-core-backend/
@@ -612,8 +613,9 @@ c:\ai-pharmacy-ecosystem/
 | Long-term memory | ChromaDB + OpenAI embeddings, extractor and persistor nodes wired into the graph |
 | Frontend | Voice billing screen, editable bill, receipt printing, medicines, sales, reorder screens |
 | Observability | request/run correlation ids, structured JSON or console logs, node/tool/LLM timing, LangSmith status reporting — `docs/observability.md` |
-| Test + evaluation foundation | 169 pytest tests (unit / integration / evaluation) against SQLite with a fake LLM — no network, no API key; plus a 15-case BI golden set with a standalone runner |
-| Documentation | 7 senior-level docs including a 42-case QA report, an architecture audit, and the testing guide |
+| Structured business queries | LLM emits a validated `BusinessQuery` (metric · dimension · period · sort · limit); dates resolved in code, all filtering/grouping/ranking in SQL — `docs/business_queries.md` |
+| Test + evaluation foundation | 385 pytest tests (unit / integration / evaluation) against SQLite with a fake LLM — no network, no API key; plus a 33-case BI golden set with a standalone runner |
+| Documentation | 8 senior-level docs including a 42-case QA report, an architecture audit, and the testing guide |
 
 ### ⛔ Not built yet
 

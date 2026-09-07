@@ -9,18 +9,30 @@ deterministic checks to the resulting state.
 WHAT THIS DOES AND DOES NOT MEASURE
 -----------------------------------
 In the default fake-LLM mode the planner is *scripted* from each case's
-``planned_capabilities``. The harness therefore does not grade the model's routing —
-it grades the pipeline around it: that the plan is honoured by the fetcher, that no
-tool silently fails, that an answer is produced with a confidence in range, and that
-the reflection loop stays inside its cap. That is a genuine regression suite for the
-graph, and it is honest about not being a model-quality benchmark.
+``planned_queries``. The harness therefore does not grade the model's routing — it
+grades the pipeline around it:
+
+- the plan is honoured by the fetcher, key for key
+- no query silently failed
+- every result carries the period it covers
+- an answer exists, with a confidence in range
+- the reflection loop stayed inside its cap
+
+That is a genuine regression suite for the graph, and it is honest about not being a
+model-quality benchmark.
+
+Period cases such as "sales last month" are graded on whether the period was applied
+and reported, NOT on which rows came back — the seeded scenario is at fixed dates, so
+asserting row contents would tie the suite to the calendar. Actual date-boundary
+values are asserted in ``tests/unit/test_business_repository.py``, against explicit
+ranges.
 
 Cases marked ``requires_real_llm`` depend on model judgement (refusing an action,
 admitting missing data). They are SKIPPED in fake mode and reported as skipped —
 never counted as passes.
 
 ``--real`` uses the configured provider and grades the planner's own routing against
-``planned_capabilities``. It costs money and is not part of ``pytest``.
+``planned_queries``. It costs money and is not part of ``pytest``.
 
 Deliberately no LLM-as-judge yet. Deterministic checks first; a judge is only worth
 adding once there is something it can grade that these checks cannot.
@@ -42,7 +54,7 @@ import tests._environment  # noqa: F401  — rewrites env before `app` is import
 from app.ai.graphs.business_graph import MAX_REFLECTIONS, get_business_graph
 from app.ai.schemas.business_analysis import BusinessAnalysis
 from app.ai.schemas.memory import MemoryExtraction
-from app.ai.schemas.planner import PlannerOutput
+from app.ai.schemas.business_query import BusinessQuery, PlannerOutput
 from app.ai.schemas.reflection import ReflectionOutput
 from tests.fakes import FakeLLM, FakeMemoryRepository
 
@@ -102,7 +114,9 @@ def _scripted_llm(case: dict[str, Any]) -> Iterator[FakeLLM]:
 
     llm = FakeLLM(
         responses={
-            PlannerOutput: PlannerOutput(tasks=list(case["planned_capabilities"])),
+            PlannerOutput: PlannerOutput(
+                queries=[BusinessQuery(**q) for q in case["planned_queries"]]
+            ),
             BusinessAnalysis: BusinessAnalysis(
                 summary=f"Scripted analysis for {case['id']}.",
                 key_insights=[],
@@ -110,7 +124,7 @@ def _scripted_llm(case: dict[str, Any]) -> Iterator[FakeLLM]:
                 confidence=0.9,
             ),
             ReflectionOutput: ReflectionOutput(
-                sufficient=True, missing_tasks=[], reason="Complete."
+                sufficient=True, missing_queries=[], reason="Complete."
             ),
             MemoryExtraction: MemoryExtraction(memories=[]),
         }
@@ -170,31 +184,43 @@ def check_state(case: dict[str, Any], state: dict[str, Any], *, real_llm: bool) 
             f"reflection loop exceeded its cap: {reflections} > {MAX_REFLECTIONS}"
         )
 
+    planned_keys = {query.key() for query in plan}
+
     if behavior == "answer_from_business_data":
         # The plan must actually drive the fetch. This is the contract that breaks
         # if planner and fetcher drift apart.
-        if set(metrics) != set(plan):
+        if set(metrics) != planned_keys:
             failures.append(
-                f"plan {sorted(plan)} does not match fetched metrics {sorted(metrics)}"
+                f"plan {sorted(planned_keys)} does not match fetched results "
+                f"{sorted(metrics)}"
             )
 
         if not plan:
             failures.append("expected business data, but the plan was empty")
 
-        failed_tools = [name for name, value in metrics.items() if "error" in value]
-        if failed_tools:
-            failures.append(f"tool(s) returned an error: {failed_tools}")
+        failed = [name for name, value in metrics.items() if "error" in value]
+        if failed:
+            failures.append(f"quer(y/ies) returned an error: {failed}")
+
+        # Every result must say which window it covers. Without it the analyzer
+        # cannot tell the user what was actually measured — the exact hole that let
+        # an all-time total be reported as "last month" in the QA pass.
+        missing_period = [
+            name for name, value in metrics.items() if "period" not in value
+        ]
+        if missing_period:
+            failures.append(f"result(s) missing a period label: {missing_period}")
 
         if real_llm:
-            expected = set(case["planned_capabilities"])
-            if set(plan) != expected:
+            expected = {BusinessQuery(**q).key() for q in case["planned_queries"]}
+            if planned_keys != expected:
                 failures.append(
-                    f"planner chose {sorted(plan)}, expected {sorted(expected)}"
+                    f"planner chose {sorted(planned_keys)}, expected {sorted(expected)}"
                 )
 
     elif behavior == "no_business_data_needed":
         if plan:
-            failures.append(f"expected no capabilities, planner chose {sorted(plan)}")
+            failures.append(f"expected no queries, planner chose {sorted(planned_keys)}")
         if metrics:
             failures.append(f"expected no metrics, fetched {sorted(metrics)}")
 

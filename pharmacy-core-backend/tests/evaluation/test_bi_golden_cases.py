@@ -40,7 +40,7 @@ def test_every_case_has_the_required_fields():
         "question",
         "category",
         "expected_behavior",
-        "planned_capabilities",
+        "planned_queries",
         "requires_real_llm",
     }
 
@@ -55,15 +55,36 @@ def test_case_ids_are_unique():
     assert len(ids) == len(set(ids)), "duplicate golden case id"
 
 
-def test_no_case_asks_for_a_capability_that_does_not_exist():
-    """Guards against writing aspirational cases the repository cannot serve.
+def test_every_planned_query_is_valid():
+    """Guards against aspirational cases the system cannot serve.
 
-    A case demanding date filtering or per-product ranking would fail forever and
-    train everyone to ignore a red suite.
+    A case demanding a category breakdown would fail forever and train everyone to
+    ignore a red suite. BusinessQuery validation is the same gate the planner faces,
+    so constructing each one here proves the case is answerable in principle.
     """
 
-    from app.ai.tools.business_tools import TOOL_REGISTRY
+    from pydantic import ValidationError
+
+    from app.ai.schemas.business_query import BusinessQuery
 
     for case in CASES:
-        unknown = set(case["planned_capabilities"]) - set(TOOL_REGISTRY)
-        assert not unknown, f"{case['id']} plans unknown capabilities: {sorted(unknown)}"
+        for raw in case["planned_queries"]:
+            try:
+                BusinessQuery(**raw)
+            except ValidationError as exc:
+                pytest.fail(f"{case['id']} plans an invalid query {raw}: {exc}")
+
+
+def test_the_set_covers_every_capability_class():
+    """A regression set that never exercises ranking would not notice it breaking."""
+
+    categories = {case["category"] for case in CASES}
+
+    assert {
+        "sales",
+        "date_filtering",
+        "ranking",
+        "grouping",
+        "combined",
+        "off_topic",
+    } <= categories

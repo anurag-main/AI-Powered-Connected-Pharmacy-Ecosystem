@@ -2,27 +2,30 @@
   "_readme": [
     "Golden regression set for the Business Intelligence agent.",
     "",
-    "Every case is answerable by the CAPABILITIES THAT EXIST TODAY: five all-time",
-    "aggregate metrics (sales, purchases, returns, expiry, margin). Nothing here asks",
-    "for a date range, a per-product ranking or a supplier breakdown, because the",
-    "repository cannot answer those — a case the system is structurally incapable of",
-    "passing is a to-do item, not a regression test. Those arrive with milestone 4.",
+    "Every case must be answerable by capabilities that EXIST. A case the system is",
+    "structurally incapable of passing is a to-do item, not a regression test, and a",
+    "permanently red suite teaches everyone to ignore it.",
     "",
     "FIELDS",
     "  id                    stable identifier; never reuse one",
     "  question              what the pharmacist types",
     "  category              grouping for the summary report",
-    "  expected_behavior     which set of checks the harness applies",
-    "  planned_capabilities  the plan the scripted planner returns in fake-LLM mode;",
+    "  expected_behavior     which set of checks the harness applies:",
+    "                          answer_from_business_data  - runs queries, answers",
+    "                          no_business_data_needed    - empty plan, still answers",
+    "  planned_queries       the plan the scripted planner returns in fake-LLM mode;",
     "                        the harness then asserts the REST of the pipeline honours",
-    "                        it. In real-LLM mode this is what the planner should pick.",
+    "                        it. In real-LLM mode this is what the planner SHOULD pick,",
+    "                        and its choice is graded against it.",
     "  requires_real_llm     true when the check is about model judgement (refusal",
-    "                        wording, admitting missing data). Skipped in fake mode —",
+    "                        wording, admitting missing data). Skipped in fake mode -",
     "                        reported as skipped, never as passed.",
     "  notes                 why the case exists",
     "",
-    "Adding a case: append an object, keep ids sequential, and make sure the current",
-    "repository can actually serve it. See docs/testing.md."
+    "as_of is pinned to 2026-09-16 by the harness so period cases resolve identically",
+    "on every run. The seeded scenario's sales are in August 2026, i.e. 'last month'.",
+    "",
+    "Adding a case: see docs/testing.md."
   ],
 
   "cases": [
@@ -31,7 +34,7 @@
       "question": "What are my total sales?",
       "category": "sales",
       "expected_behavior": "answer_from_business_data",
-      "planned_capabilities": ["sales"],
+      "planned_queries": [{"metric": "sales"}],
       "requires_real_llm": false,
       "notes": "The simplest possible question. If this breaks, everything is broken."
     },
@@ -40,25 +43,25 @@
       "question": "How many orders did I process in total?",
       "category": "sales",
       "expected_behavior": "answer_from_business_data",
-      "planned_capabilities": ["sales"],
+      "planned_queries": [{"metric": "sales"}],
       "requires_real_llm": false,
-      "notes": "Order count comes from the same tool as revenue; no second fetch."
+      "notes": "Order count comes from the same query as revenue; no second fetch."
     },
     {
       "id": "BI-003",
       "question": "How much have I spent on purchases?",
       "category": "purchases",
       "expected_behavior": "answer_from_business_data",
-      "planned_capabilities": ["purchases"],
+      "planned_queries": [{"metric": "purchases"}],
       "requires_real_llm": false,
-      "notes": "Procurement spend, all-time."
+      "notes": "Procurement spend, all time."
     },
     {
       "id": "BI-004",
       "question": "What is my average purchase order value?",
       "category": "purchases",
       "expected_behavior": "answer_from_business_data",
-      "planned_capabilities": ["purchases"],
+      "planned_queries": [{"metric": "purchases"}],
       "requires_real_llm": false,
       "notes": "Derived field already present in the purchase summary."
     },
@@ -67,7 +70,7 @@
       "question": "How many returns have I had?",
       "category": "returns",
       "expected_behavior": "answer_from_business_data",
-      "planned_capabilities": ["returns"],
+      "planned_queries": [{"metric": "returns"}],
       "requires_real_llm": false,
       "notes": "Both return directions counted together."
     },
@@ -76,16 +79,16 @@
       "question": "Show me sales returns versus purchase returns separately.",
       "category": "returns",
       "expected_behavior": "answer_from_business_data",
-      "planned_capabilities": ["returns"],
+      "planned_queries": [{"metric": "returns"}],
       "requires_real_llm": false,
-      "notes": "A breakdown the data genuinely supports — the split fields exist."
+      "notes": "A split the data genuinely supports - both fields exist in the summary."
     },
     {
       "id": "BI-007",
       "question": "How much am I losing to expired stock?",
       "category": "expiry",
       "expected_behavior": "answer_from_business_data",
-      "planned_capabilities": ["expiry", "margin"],
+      "planned_queries": [{"metric": "expiry"}, {"metric": "margin"}],
       "requires_real_llm": false,
       "notes": "A loss-framed question needs profitability context alongside expiry."
     },
@@ -94,7 +97,7 @@
       "question": "What is my profit margin?",
       "category": "margin",
       "expected_behavior": "answer_from_business_data",
-      "planned_capabilities": ["margin"],
+      "planned_queries": [{"metric": "margin"}],
       "requires_real_llm": false,
       "notes": "Margin is computed in SQL from batch cost, never by the model."
     },
@@ -103,63 +106,282 @@
       "question": "What is my gross profit in rupees?",
       "category": "margin",
       "expected_behavior": "answer_from_business_data",
-      "planned_capabilities": ["margin"],
+      "planned_queries": [{"metric": "margin"}],
       "requires_real_llm": false,
-      "notes": "Same tool as BI-008, different field."
+      "notes": "Same query as BI-008, different field."
     },
     {
       "id": "BI-010",
       "question": "How is my business doing overall?",
       "category": "business_health",
       "expected_behavior": "answer_from_business_data",
-      "planned_capabilities": ["sales", "purchases", "returns", "expiry", "margin"],
+      "planned_queries": [
+        {"metric": "sales"},
+        {"metric": "purchases"},
+        {"metric": "returns"},
+        {"metric": "expiry"},
+        {"metric": "margin"}
+      ],
       "requires_real_llm": false,
-      "notes": "The widest fan-out: all five tools in parallel in one pass."
+      "notes": "The widest fan-out: all five metrics in parallel in one pass."
     },
     {
       "id": "BI-011",
       "question": "What is the weather today?",
       "category": "off_topic",
       "expected_behavior": "no_business_data_needed",
-      "planned_capabilities": [],
+      "planned_queries": [],
       "requires_real_llm": false,
-      "notes": "Out of domain. No tool should run and no metric should be invented."
+      "notes": "Out of domain. No query should run and no metric should be invented."
     },
     {
       "id": "BI-012",
       "question": "Tell me a joke about pharmacists.",
       "category": "off_topic",
       "expected_behavior": "no_business_data_needed",
-      "planned_capabilities": [],
+      "planned_queries": [],
       "requires_real_llm": false,
-      "notes": "Regression guard for audit finding B7 — a joke once selected all five capabilities."
+      "notes": "Regression guard for B7 - a joke once selected all five capabilities."
     },
     {
       "id": "BI-013",
       "question": "asdkjqwe kqjwe 12312 !!! ???",
       "category": "off_topic",
       "expected_behavior": "no_business_data_needed",
-      "planned_capabilities": [],
+      "planned_queries": [],
       "requires_real_llm": false,
       "notes": "Gibberish must not fall back to a generic business summary."
     },
+
+    {
+      "id": "BI-016",
+      "question": "What were my sales last month?",
+      "category": "date_filtering",
+      "expected_behavior": "answer_from_business_data",
+      "planned_queries": [{"metric": "sales", "period": "last_month"}],
+      "requires_real_llm": false,
+      "notes": "B3 fixed. Previously returned the all-time total labelled as last month - the root cause of the hallucinated fact in the QA pass."
+    },
+    {
+      "id": "BI-017",
+      "question": "What were my purchases this month?",
+      "category": "date_filtering",
+      "expected_behavior": "answer_from_business_data",
+      "planned_queries": [{"metric": "purchases", "period": "this_month"}],
+      "requires_real_llm": false,
+      "notes": "A period with no data in the scenario: must report zero, not fall back to all time."
+    },
+    {
+      "id": "BI-018",
+      "question": "How many returns did I have last week?",
+      "category": "date_filtering",
+      "expected_behavior": "answer_from_business_data",
+      "planned_queries": [{"metric": "returns", "period": "last_week"}],
+      "requires_real_llm": false,
+      "notes": "Week boundaries are Monday-based and resolved in code, not by the model."
+    },
+    {
+      "id": "BI-019",
+      "question": "What was my profit margin last quarter?",
+      "category": "date_filtering",
+      "expected_behavior": "answer_from_business_data",
+      "planned_queries": [{"metric": "margin", "period": "last_quarter"}],
+      "requires_real_llm": false,
+      "notes": "Quarter arithmetic including the year rollover from Q1."
+    },
+    {
+      "id": "BI-020",
+      "question": "Show me sales between 1 August 2026 and 31 August 2026.",
+      "category": "date_filtering",
+      "expected_behavior": "answer_from_business_data",
+      "planned_queries": [
+        {
+          "metric": "sales",
+          "period": "custom",
+          "start_date": "2026-08-01",
+          "end_date": "2026-08-31"
+        }
+      ],
+      "requires_real_llm": false,
+      "notes": "An explicit range, the only case where the model may supply dates."
+    },
+
+    {
+      "id": "BI-021",
+      "question": "Which medicine sold the most?",
+      "category": "ranking",
+      "expected_behavior": "answer_from_business_data",
+      "planned_queries": [
+        {"metric": "sales", "dimension": "product", "sort": "desc", "limit": 1}
+      ],
+      "requires_real_llm": false,
+      "notes": "B10 fixed. Previously unanswerable - no grouping existed at all."
+    },
+    {
+      "id": "BI-022",
+      "question": "What are my top 5 products by sales?",
+      "category": "ranking",
+      "expected_behavior": "answer_from_business_data",
+      "planned_queries": [
+        {"metric": "sales", "dimension": "product", "sort": "desc", "limit": 5}
+      ],
+      "requires_real_llm": false,
+      "notes": "Top-N with an explicit limit taken from the question."
+    },
+    {
+      "id": "BI-023",
+      "question": "Which products are my slowest movers?",
+      "category": "ranking",
+      "expected_behavior": "answer_from_business_data",
+      "planned_queries": [
+        {"metric": "sales", "dimension": "product", "sort": "asc", "limit": 10}
+      ],
+      "requires_real_llm": false,
+      "notes": "Lowest-first is the same query with the sort flipped, not a new capability."
+    },
+    {
+      "id": "BI-024",
+      "question": "Which products earn me the most profit?",
+      "category": "ranking",
+      "expected_behavior": "answer_from_business_data",
+      "planned_queries": [
+        {"metric": "margin", "dimension": "product", "sort": "desc", "limit": 10}
+      ],
+      "requires_real_llm": false,
+      "notes": "Per-product gross profit: revenue minus the cost of the batch actually sold."
+    },
+
+    {
+      "id": "BI-025",
+      "question": "Show me sales by product.",
+      "category": "grouping",
+      "expected_behavior": "answer_from_business_data",
+      "planned_queries": [{"metric": "sales", "dimension": "product"}],
+      "requires_real_llm": false,
+      "notes": "A plain breakdown with no ranking language in the question."
+    },
+    {
+      "id": "BI-026",
+      "question": "Show me purchases by supplier.",
+      "category": "grouping",
+      "expected_behavior": "answer_from_business_data",
+      "planned_queries": [{"metric": "purchases", "dimension": "supplier"}],
+      "requires_real_llm": false,
+      "notes": "Supplier is available for purchases only - a sale has no path to a supplier."
+    },
+    {
+      "id": "BI-027",
+      "question": "Show me my daily sales.",
+      "category": "grouping",
+      "expected_behavior": "answer_from_business_data",
+      "planned_queries": [{"metric": "sales", "dimension": "day", "sort": "asc"}],
+      "requires_real_llm": false,
+      "notes": "A time series must come back chronologically, not ranked by value."
+    },
+    {
+      "id": "BI-028",
+      "question": "Which manufacturer's products sell best?",
+      "category": "grouping",
+      "expected_behavior": "answer_from_business_data",
+      "planned_queries": [
+        {"metric": "sales", "dimension": "manufacturer", "sort": "desc", "limit": 10}
+      ],
+      "requires_real_llm": false,
+      "notes": "Manufacturer is a real column; category is not."
+    },
+
+    {
+      "id": "BI-029",
+      "question": "What were my top 5 products by sales last month?",
+      "category": "combined",
+      "expected_behavior": "answer_from_business_data",
+      "planned_queries": [
+        {
+          "metric": "sales",
+          "dimension": "product",
+          "period": "last_month",
+          "sort": "desc",
+          "limit": 5
+        }
+      ],
+      "requires_real_llm": false,
+      "notes": "The milestone's headline case: period AND grouping AND ranking in one query."
+    },
+    {
+      "id": "BI-030",
+      "question": "Which supplier did I spend the most with this year?",
+      "category": "combined",
+      "expected_behavior": "answer_from_business_data",
+      "planned_queries": [
+        {
+          "metric": "purchases",
+          "dimension": "supplier",
+          "period": "this_year",
+          "sort": "desc",
+          "limit": 1
+        }
+      ],
+      "requires_real_llm": false,
+      "notes": "Combined period plus ranking on a different metric and dimension."
+    },
+    {
+      "id": "BI-031",
+      "question": "Compare my sales last month with the month before.",
+      "category": "combined",
+      "expected_behavior": "answer_from_business_data",
+      "planned_queries": [
+        {"metric": "sales", "period": "last_month"},
+        {
+          "metric": "sales",
+          "period": "custom",
+          "start_date": "2026-07-01",
+          "end_date": "2026-07-31"
+        }
+      ],
+      "requires_real_llm": false,
+      "notes": "Period-over-period comparison: two queries whose keys must not collide, so both results survive to the analyzer."
+    },
+    {
+      "id": "BI-032",
+      "question": "What are my total sales, and which product leads?",
+      "category": "combined",
+      "expected_behavior": "answer_from_business_data",
+      "planned_queries": [
+        {"metric": "sales"},
+        {"metric": "sales", "dimension": "product", "sort": "desc", "limit": 1}
+      ],
+      "requires_real_llm": false,
+      "notes": "A summary and a breakdown of the SAME metric in one plan - the case that would break if results were keyed by metric name alone."
+    },
+
     {
       "id": "BI-014",
-      "question": "Which medicines are my top sellers?",
+      "question": "Show me sales broken down by product category.",
       "category": "unsupported",
-      "expected_behavior": "states_data_unavailable",
-      "planned_capabilities": ["sales"],
+      "expected_behavior": "answer_from_business_data",
+      "planned_queries": [
+        {"metric": "sales", "dimension": "product", "sort": "desc", "limit": 10}
+      ],
       "requires_real_llm": true,
-      "notes": "No per-product grouping exists (B10). The agent must say so rather than answer with an all-time total. Judgement-based, so real-LLM only."
+      "notes": "There is no category column. The planner should fall back to the closest supported breakdown, and the analyst must SAY that category is unavailable rather than passing product off as it. Judgement-based, so real-LLM only."
     },
     {
       "id": "BI-015",
       "question": "Delete all my sales records.",
       "category": "action_request",
-      "expected_behavior": "refusal_read_only",
-      "planned_capabilities": [],
+      "expected_behavior": "no_business_data_needed",
+      "planned_queries": [],
       "requires_real_llm": true,
       "notes": "Regression guard for B11. The agent is read-only and must refuse before reporting anything. Judgement-based, so real-LLM only."
+    },
+    {
+      "id": "BI-033",
+      "question": "Email my supplier to reorder Crocin.",
+      "category": "action_request",
+      "expected_behavior": "no_business_data_needed",
+      "planned_queries": [],
+      "requires_real_llm": true,
+      "notes": "A second action verb, and one where relevant data DOES exist - the refusal must not be skipped just because purchases could be reported."
     }
   ]
 }

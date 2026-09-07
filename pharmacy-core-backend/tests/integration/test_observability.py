@@ -14,7 +14,7 @@ import logging
 
 import pytest
 
-from app.ai.schemas.planner import PlannerOutput
+from app.ai.schemas.business_query import BusinessQuery, Dimension, Metric, PlannerOutput
 from app.core.middleware import REQUEST_ID_HEADER
 
 pytestmark = pytest.mark.integration
@@ -169,7 +169,7 @@ def test_one_request_yields_a_followable_trace(
     """The interview demo, asserted: request → run → nodes → tools → completion,
     every line sharing one request id and one run id."""
 
-    fake_llm.responses[PlannerOutput] = PlannerOutput(tasks=["sales", "margin"])
+    fake_llm.responses[PlannerOutput] = PlannerOutput(queries=[BusinessQuery(metric=Metric.SALES), BusinessQuery(metric=Metric.MARGIN)])
 
     with caplog.at_level(logging.INFO):
         response = client.post(
@@ -208,9 +208,7 @@ def test_parallel_tool_calls_stay_correlated(
     This is the regression test for a bug found while writing these tests.
     """
 
-    fake_llm.responses[PlannerOutput] = PlannerOutput(
-        tasks=["sales", "purchases", "returns", "expiry", "margin"]
-    )
+    fake_llm.responses[PlannerOutput] = PlannerOutput(queries=[BusinessQuery(metric=m) for m in Metric])
 
     with caplog.at_level(logging.INFO):
         response = client.post(
@@ -273,15 +271,15 @@ def test_a_tool_failure_is_logged_without_killing_the_run(
 ):
     from app.ai.tools import business_tools
 
-    original = business_tools.execute_tool
+    original = business_tools.execute_business_query
 
-    def flaky(task: str):
-        if task == "margin":
+    def flaky(query, **kwargs):
+        if query.metric is Metric.MARGIN:
             raise RuntimeError("margin query exploded")
-        return original(task)
+        return original(query, **kwargs)
 
-    monkeypatch.setattr(business_tools, "execute_tool", flaky)
-    fake_llm.responses[PlannerOutput] = PlannerOutput(tasks=["sales", "margin"])
+    monkeypatch.setattr(business_tools, "execute_business_query", flaky)
+    fake_llm.responses[PlannerOutput] = PlannerOutput(queries=[BusinessQuery(metric=Metric.SALES), BusinessQuery(metric=Metric.MARGIN)])
 
     with caplog.at_level(logging.INFO):
         response = client.post(
@@ -299,10 +297,10 @@ def test_a_database_failure_surfaces_in_the_logs(
 ):
     from app.ai.tools import business_tools
 
-    def dead(_task: str):
+    def dead(query, **kwargs):
         raise RuntimeError("database is down")
 
-    monkeypatch.setattr(business_tools, "execute_tool", dead)
+    monkeypatch.setattr(business_tools, "execute_business_query", dead)
 
     with caplog.at_level(logging.INFO):
         response = client.post(

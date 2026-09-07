@@ -45,6 +45,10 @@ MAX_REFLECTIONS = 2
 # Identifies this agent in every log line it produces.
 AGENT_NAME = "business"
 
+# A property of the deployed graph, not of any one run — which is why it lives
+# here rather than in BusinessState, where nothing ever set it.
+AGENT_VERSION = "business-agent-v2"
+
 # The `memories` field on BusinessState holds MemoryFact (Pydantic) objects,
 # and MemorySaver checkpoints that state via msgpack. Without registering the
 # type, LangGraph warns on every load that it will BLOCK deserializing this

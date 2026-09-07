@@ -148,22 +148,31 @@ def test_an_empty_database_still_answers(client, db_session, fake_llm, thread_id
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.known_gap
-def test_agent_version_is_a_service_default_not_agent_state(
+def test_agent_version_reports_the_deployed_graph(
     client, seeded_app_db, fake_llm, thread_id
 ):
-    """``agent_version`` and ``execution_time_ms`` are declared on ``BusinessState``
-    but written by no node, so the service's fallback is always what ships.
-
-    Harmless today, misleading later: the field looks like it reports the agent's own
-    version. Milestone 3 (state cleanup) either populates it or removes it.
+    """Previously dead state: declared on BusinessState, written by no node, so the
+    service's fallback always shipped. It is now a real constant owned by the graph
+    module it describes, and the bump to v2 marks the structured-query rewrite.
     """
+
+    from app.ai.graphs.business_graph import AGENT_VERSION
 
     response = client.post(
         ENDPOINT,
         json={"question": "What were total sales?", "thread_id": thread_id},
     )
 
-    assert response.json()["agent_version"] == "business-agent-v1", (
-        "a node now sets agent_version — remove this gap test."
-    )
+    assert response.json()["agent_version"] == AGENT_VERSION == "business-agent-v2"
+
+
+def test_the_dead_state_fields_are_gone():
+    """A field nobody writes reads like a promise and silently supplies a default."""
+
+    from app.ai.state.business_state import BusinessState
+
+    annotations = set(BusinessState.__annotations__)
+
+    assert not (
+        {"errors", "execution_time_ms", "agent_version"} & annotations
+    ), "a removed dead field is back — give it a writer or remove it again"
