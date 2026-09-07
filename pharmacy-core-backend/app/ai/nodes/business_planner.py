@@ -9,7 +9,7 @@ from app.ai.llm import get_llm
 from app.ai.prompts.planner_prompt import (
     PLANNER_SYSTEM_PROMPT,
 )
-from app.ai.schemas.planner import PlannerOutput
+from app.ai.schemas.business_query import PlannerOutput
 from app.ai.state.business_state import BusinessState
 from app.ai.utils.message_utils import (
     get_latest_user_message,
@@ -46,7 +46,7 @@ def business_planner(
     result = structured_llm.invoke(messages)
 
     return {
-        "plan": result.tasks,
+        "plan": result.queries,
         # Reset the per-turn reflection budget. reflection_count is checkpointed,
         # so without this a new question would inherit the previous turn's count
         # and could skip the reflection loop entirely.

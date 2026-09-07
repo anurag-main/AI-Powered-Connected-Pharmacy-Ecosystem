@@ -11,13 +11,7 @@ from langgraph.prebuilt import (
 
 from app.ai.nodes.tool_agent import tool_agent
 from app.ai.state.business_state import BusinessState
-from app.ai.tools.business_tools import (
-    get_expiry_summary,
-    get_margin_summary,
-    get_purchase_summary,
-    get_return_summary,
-    get_sales_summary,
-)
+from app.ai.tools.business_tools import BUSINESS_TOOLS
 
 
 def get_business_tool_graph():
@@ -25,13 +19,7 @@ def get_business_tool_graph():
     Build and compile the native LangGraph Tool Calling graph.
     """
 
-    tools = [
-        get_sales_summary,
-        get_purchase_summary,
-        get_return_summary,
-        get_expiry_summary,
-        get_margin_summary,
-    ]
+    tools = BUSINESS_TOOLS
 
     graph = StateGraph(BusinessState)
 
