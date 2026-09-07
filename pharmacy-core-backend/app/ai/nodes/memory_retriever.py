@@ -1,22 +1,15 @@
-"""Node responsible for retrieving long-term memories."""
+"""Node that retrieves long-term memories for the current question."""
 
 from langchain_core.runnables import RunnableConfig
 
-from app.ai.memory.memory_repository import (
-    MemoryRepository,
-)
-from app.ai.state.business_state import (
-    BusinessState,
-)
-from app.ai.utils.message_utils import (
-    get_latest_user_message,
-)
-
+from app.ai.memory.memory_repository import MemoryRepository, MemoryScope
+from app.ai.state.business_state import BusinessState
+from app.ai.utils.message_utils import get_latest_user_message
 
 # Built on first use, not at import time. Constructing MemoryRepository opens the
 # ChromaDB client, so doing it at import meant merely importing this module (or any
 # graph containing it) touched the on-disk vector store. Lazy construction keeps the
-# runtime behaviour identical — same single shared instance — while letting callers
+# runtime behaviour identical - same single shared instance - while letting callers
 # that never run this node avoid the side effect entirely.
 _repository: MemoryRepository | None = None
 
@@ -36,23 +29,16 @@ def memory_retriever(
     state: BusinessState,
     config: RunnableConfig,
 ) -> BusinessState:
-    """
-    Retrieve the most relevant long-term memories
-    for the user's latest question.
+    """Retrieve the memories most relevant to the user's latest question.
+
+    Scoped to this conversation, so nothing another thread stored can surface here.
     """
 
-    thread_id = config["configurable"]["thread_id"]
-
-    latest_question = get_latest_user_message(
-        state,
-    )
+    scope = MemoryScope(thread_id=config["configurable"]["thread_id"])
 
     retrieved_memories = get_repository().search_memories(
-        query=latest_question,
-        thread_id=thread_id,
-        k=5,
+        query=get_latest_user_message(state),
+        scope=scope,
     )
 
-    return {
-        "retrieved_memories": retrieved_memories,
-    }
+    return {"retrieved_memories": retrieved_memories}
