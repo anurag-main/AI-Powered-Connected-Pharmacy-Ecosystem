@@ -41,7 +41,7 @@ import app.models  # noqa: E402,F401  — registers every table on Base.metadata
 from app.ai.nodes import memory_persistor, memory_retriever  # noqa: E402
 from app.core.database import Base  # noqa: E402
 from app.core.logging_config import configure_logging  # noqa: E402
-from tests.factories import seed_scenario  # noqa: E402
+from tests.factories import seed_expiry_scenario, seed_scenario  # noqa: E402
 from tests.fakes import FakeLLM, FakeMemoryRepository, default_responses  # noqa: E402
 
 # Node modules that did `from app.ai.llm import get_llm`. That binds the function
@@ -52,6 +52,8 @@ _LLM_NODE_MODULES = (
     "app.ai.nodes.business_analyzer",
     "app.ai.nodes.business_reflector",
     "app.ai.nodes.memory_extractor",
+    "app.ai.nodes.expiry_planner",
+    "app.ai.nodes.expiry_analyzer",
 )
 
 
@@ -144,6 +146,47 @@ def seeded_app_db(seeded_db):
     """
 
     return seeded_db
+
+
+@pytest.fixture
+def expiry_as_of() -> "date":
+    """The date the expiry scenario is built around.
+
+    A fixed Wednesday rather than the real clock, so no expiry test changes meaning
+    overnight or fails on the first of a month.
+    """
+
+    from datetime import date
+
+    return date(2026, 9, 16)
+
+
+@pytest.fixture
+def expiry_db(db_session, expiry_as_of):
+    """``db_session`` with the expiry scenario loaded, relative to ``expiry_as_of``.
+
+    For unit tests, which pass ``as_of`` explicitly into the service.
+    """
+
+    seed_expiry_scenario(db_session, expiry_as_of)
+    return db_session
+
+
+@pytest.fixture
+def expiry_app_db(db_session):
+    """The expiry scenario anchored to the REAL today.
+
+    Tests that drive the graph or the endpoint need this. Production always assesses
+    against today — there is deliberately no way to pass ``as_of`` through the graph,
+    since a caller choosing the reference date could quietly produce a report about
+    a day that never happened. The scenario is defined in relative days, so every
+    derived figure is identical whichever day it runs on.
+    """
+
+    from app.core.time_range import today
+
+    seed_expiry_scenario(db_session, today())
+    return db_session
 
 
 # ---------------------------------------------------------------------------

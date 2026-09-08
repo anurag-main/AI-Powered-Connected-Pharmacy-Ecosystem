@@ -1,0 +1,201 @@
+{
+  "_readme": [
+    "Golden regression set for the Expiry Risk Agent.",
+    "",
+    "Runs against the expiry scenario in tests/factories.py, anchored to the real",
+    "today. Every case must be answerable by what the agent can actually do.",
+    "",
+    "FIELDS",
+    "  id                  stable identifier; never reuse one",
+    "  question            what the pharmacist types",
+    "  category            grouping for the summary report",
+    "  planned_query       the query the scripted planner returns in fake-LLM mode.",
+    "                      In real-LLM mode this is what the planner SHOULD choose and",
+    "                      its answer is graded against it.",
+    "  expect              deterministic assertions on the computed report. Every key",
+    "                      is optional; only what a case cares about is listed.",
+    "                        batches            exact set of batch numbers returned",
+    "                        min_batches        at least this many items",
+    "                        total_at_risk      exact count of batches with excess",
+    "                        total_value_at_risk exact rupees",
+    "                        first_batch        the top-ranked batch number",
+    "                        risk_levels        every returned item must have one of these",
+    "                        item               per-batch field assertions",
+    "                        note_contains      a substring that must appear in notes",
+    "  requires_real_llm   true when the check is about model judgement (refusing an",
+    "                      action, admitting missing data). Skipped in fake mode and",
+    "                      reported as skipped, never as passed.",
+    "  notes               why the case exists",
+    "",
+    "SCENARIO RECAP (relative to today = D)",
+    "  P1  Paracetamol  D+5    30 units  cost 10  -> demand 10, excess 20,  CRITICAL",
+    "  P2  Paracetamol  D+20  200 units  cost 10  -> demand 30, excess 170, HIGH",
+    "  A1  Amoxicillin  D+10   50 units  cost 20  -> never sold, excess 50, HIGH",
+    "  V1  Vitamin C    D+15   40 units  cost 5   -> sells out, excess 0,   LOW",
+    "  C1  Cough Syrup  D-10   25 units  cost 40  -> expired,   excess 25,  EXPIRED",
+    "  Z1  Cetirizine   D+300 100 units  cost 1   -> excess 100,            LOW"
+  ],
+
+  "cases": [
+    {
+      "id": "EXP-001",
+      "question": "Which medicines are expiring soon?",
+      "category": "basic",
+      "planned_query": {"window_days": 30},
+      "expect": {
+        "batches": ["P1", "P2", "A1", "V1", "C1"],
+        "note_contains": "not a forecast"
+      },
+      "requires_real_llm": false,
+      "notes": "The default question. 30 days catches everything except the far-future batch."
+    },
+    {
+      "id": "EXP-002",
+      "question": "Show me medicines expiring in the next 30 days.",
+      "category": "basic",
+      "planned_query": {"window_days": 30},
+      "expect": {"batches": ["P1", "P2", "A1", "V1", "C1"]},
+      "requires_real_llm": false,
+      "notes": "An explicit window, phrased differently from EXP-001."
+    },
+    {
+      "id": "EXP-003",
+      "question": "What is expiring this week?",
+      "category": "window",
+      "planned_query": {"window_days": 7},
+      "expect": {"batches": ["P1", "C1"]},
+      "requires_real_llm": false,
+      "notes": "A short window must genuinely narrow the result, not return everything."
+    },
+    {
+      "id": "EXP-004",
+      "question": "What inventory is at expiry risk?",
+      "category": "basic",
+      "planned_query": {"window_days": 90},
+      "expect": {"total_at_risk": 4, "total_value_at_risk": 3900.0},
+      "requires_real_llm": false,
+      "notes": "90-day window excludes Z1, so 4 batches at risk worth 3900 - not the 5/4000 of the full-year view."
+    },
+    {
+      "id": "EXP-005",
+      "question": "Are there any critical expiry risks?",
+      "category": "risk_level",
+      "planned_query": {"window_days": 90, "risk_level": "critical"},
+      "expect": {"batches": ["P1"], "risk_levels": ["critical"]},
+      "requires_real_llm": false,
+      "notes": "Only P1 combines a short window with real excess."
+    },
+    {
+      "id": "EXP-006",
+      "question": "What stock has already expired?",
+      "category": "risk_level",
+      "planned_query": {"window_days": 1, "risk_level": "expired"},
+      "expect": {"batches": ["C1"], "risk_levels": ["expired"]},
+      "requires_real_llm": false,
+      "notes": "Realised loss, not risk. Must be reachable as its own question."
+    },
+    {
+      "id": "EXP-007",
+      "question": "What should I prioritise first?",
+      "category": "prioritisation",
+      "planned_query": {"window_days": 90, "limit": 5},
+      "expect": {"first_batch": "C1", "min_batches": 3},
+      "requires_real_llm": false,
+      "notes": "Expired stock outranks everything: the money is already gone."
+    },
+    {
+      "id": "EXP-008",
+      "question": "Which expiring medicines have the highest inventory value?",
+      "category": "prioritisation",
+      "planned_query": {"window_days": 90, "limit": 10},
+      "expect": {
+        "item": {"P2": {"value_at_risk": 1700.0, "potential_excess": 170}}
+      },
+      "requires_real_llm": false,
+      "notes": "P2 is the largest single exposure; the figure must be exact."
+    },
+    {
+      "id": "EXP-009",
+      "question": "Which items have more stock than expected demand before expiry?",
+      "category": "excess",
+      "planned_query": {"window_days": 90},
+      "expect": {
+        "total_at_risk": 4,
+        "item": {"V1": {"potential_excess": 0, "risk_level": "low"}}
+      },
+      "requires_real_llm": false,
+      "notes": "The core question the agent exists for. V1 has 40 units expiring in 15 days and is still fine, because it sells 10 a day."
+    },
+    {
+      "id": "EXP-010",
+      "question": "How much money is at risk from expiry?",
+      "category": "value",
+      "planned_query": {"window_days": 90},
+      "expect": {"total_value_at_risk": 3900.0},
+      "requires_real_llm": false,
+      "notes": "A batch with no excess must not inflate the total."
+    },
+    {
+      "id": "EXP-011",
+      "question": "Is my Paracetamol stock at risk?",
+      "category": "fefo",
+      "planned_query": {"window_days": 90},
+      "expect": {
+        "item": {
+          "P1": {"estimated_demand": 10, "potential_excess": 20},
+          "P2": {"estimated_demand": 30, "potential_excess": 170}
+        }
+      },
+      "requires_real_llm": false,
+      "notes": "The FEFO allocation. P2 gets 30 units of demand, not 40, because P1 is ahead of it in the queue and takes 10. An even split would give both the wrong number."
+    },
+    {
+      "id": "EXP-012",
+      "question": "Which stock is not selling and about to expire?",
+      "category": "missing_data",
+      "planned_query": {"window_days": 90},
+      "expect": {
+        "item": {"A1": {"estimated_demand": 0, "potential_excess": 50}},
+        "note_contains": "No sales history at all"
+      },
+      "requires_real_llm": false,
+      "notes": "Amoxicillin has never sold. Zero demand here means 'unknown', and the note must say so rather than let it read as a confident zero."
+    },
+    {
+      "id": "EXP-013",
+      "question": "Give me my top 3 expiry risks.",
+      "category": "prioritisation",
+      "planned_query": {"window_days": 90, "limit": 3},
+      "expect": {"min_batches": 3, "first_batch": "C1"},
+      "requires_real_llm": false,
+      "notes": "Ranking must happen before the limit, or 'top 3' means 'first 3 out of SQL'."
+    },
+    {
+      "id": "EXP-014",
+      "question": "Show me expiry risk excluding stock that has already expired.",
+      "category": "window",
+      "planned_query": {"window_days": 90, "include_expired": false},
+      "expect": {"batches": ["P1", "P2", "A1", "V1"], "first_batch": "P1"},
+      "requires_real_llm": false,
+      "notes": "With C1 gone the critical batch leads."
+    },
+    {
+      "id": "EXP-015",
+      "question": "Apply a 20% discount to everything expiring this month.",
+      "category": "action_request",
+      "planned_query": {"window_days": 30},
+      "expect": {},
+      "requires_real_llm": true,
+      "notes": "The agent is advisory. It must say it cannot apply a discount before reporting anything. Judgement-based, so real-LLM only."
+    },
+    {
+      "id": "EXP-016",
+      "question": "Return the expired cough syrup to the supplier for me.",
+      "category": "action_request",
+      "planned_query": {"window_days": 90},
+      "expect": {},
+      "requires_real_llm": true,
+      "notes": "A second action verb, and one where a supplier return is a genuinely sensible recommendation - the refusal must not be skipped just because the advice is good."
+    }
+  ]
+}

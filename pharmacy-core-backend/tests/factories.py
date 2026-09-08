@@ -235,3 +235,138 @@ def seed_scenario(db: Session) -> dict[str, object]:
         "sale_two": sale_two,
         "supplier": supplier,
     }
+
+
+# ===========================================================================
+# Expiry-risk scenario
+# ===========================================================================
+#
+# Separate from seed_scenario() on purpose: the BI tests pin exact figures against
+# that data, and bending it to also serve expiry would break 100+ assertions for no
+# gain.
+#
+# Everything here is relative to an `as_of` the caller passes in, so no test depends
+# on the day it runs.
+#
+# THE SCENARIO (as_of = D)
+# ------------------------
+# PARACETAMOL — sells 2/day (180 units over the 90-day lookback)
+#   P1  expires D+5    30 units   cost 10.00   FEFO first
+#   P2  expires D+20  200 units   cost 10.00   FEFO second
+#
+#   P1: 5 days x 2/day = 10 units of demand available, has 30  -> sells 10, excess 20
+#   P2: 20 days x 2/day = 40 total demand, 10 already taken by P1
+#       -> 30 available, has 200 -> sells 30, excess 170
+#
+#   This is the FEFO point: P2's excess is large *because* P1 is consuming the
+#   early demand. Split the demand evenly instead and you would get both wrong.
+#
+# AMOXICILLIN — never sold at all
+#   A1  expires D+10   50 units   cost 20.00
+#   -> no history, demand 0, excess 50, value at risk 1000.00
+#
+# VITAMIN C — sells 10/day (900 over the lookback), tiny batch
+#   V1  expires D+15   40 units   cost 5.00
+#   -> 15 days x 10/day = 150 demand, has 40 -> sells all 40, excess 0, LOW
+#   This is the batch a naive "expires soon" report would flag and shouldn't.
+#
+# COUGH SYRUP — already expired
+#   C1  expired D-10   25 units   cost 40.00
+#   -> cannot sell, excess 25, value at risk 1000.00, EXPIRED
+#
+# FAR-FUTURE STOCK — outside every window
+#   Z1  expires D+300  100 units  cost 1.00
+# ===========================================================================
+
+EXPIRY_EXPECTED = {
+    "paracetamol_near": {"excess": 20, "value_at_risk": 200.00, "risk": "critical"},
+    "paracetamol_bulk": {"excess": 170, "value_at_risk": 1700.00, "risk": "high"},
+    "amoxicillin": {"excess": 50, "value_at_risk": 1000.00, "risk": "high"},
+    "vitamin_c": {"excess": 0, "value_at_risk": 0.00, "risk": "low"},
+    "cough_syrup": {"excess": 25, "value_at_risk": 1000.00, "risk": "expired"},
+}
+
+
+def seed_expiry_scenario(db: Session, as_of: date) -> dict[str, object]:
+    """Insert the expiry scenario above, relative to ``as_of``."""
+
+    from datetime import timedelta
+
+    def medicine(name: str, mrp: str, maker: str) -> Medicine:
+        return Medicine(
+            name=name,
+            normalized_name=name.lower(),
+            mrp=Decimal(mrp),
+            hsn_code="30049099",
+            manufacturer=maker,
+        )
+
+    paracetamol = medicine("Paracetamol 500", "15.00", "Generic Pharma")
+    amoxicillin = medicine("Amoxicillin 250", "40.00", "Generic Pharma")
+    vitamin_c = medicine("Vitamin C 500", "8.00", "Wellness Labs")
+    cough_syrup = medicine("Cough Syrup 100ml", "70.00", "Wellness Labs")
+    far_future = medicine("Cetirizine 10", "5.00", "Generic Pharma")
+
+    db.add_all([paracetamol, amoxicillin, vitamin_c, cough_syrup, far_future])
+    db.flush()
+
+    def batch(med: Medicine, number: str, days: int, qty: int, cost: str) -> Batch:
+        return Batch(
+            medicine_id=med.id,
+            batch_number=number,
+            expiry_date=as_of + timedelta(days=days),
+            quantity=qty,
+            cost_price=Decimal(cost),
+        )
+
+    batches = {
+        "P1": batch(paracetamol, "P1", 5, 30, "10.00"),
+        "P2": batch(paracetamol, "P2", 20, 200, "10.00"),
+        "A1": batch(amoxicillin, "A1", 10, 50, "20.00"),
+        "V1": batch(vitamin_c, "V1", 15, 40, "5.00"),
+        "C1": batch(cough_syrup, "C1", -10, 25, "40.00"),
+        "Z1": batch(far_future, "Z1", 300, 100, "1.00"),
+    }
+    db.add_all(list(batches.values()))
+    db.flush()
+
+    # Sales history inside the 90-day lookback. One sale per medicine carrying the
+    # whole volume keeps the fixture small; the service only reads summed quantity.
+    def sell(med: Medicine, from_batch: Batch, units: int, days_ago: int) -> None:
+        sale = Sale(
+            customer_id=None,
+            total_amount=Decimal(units) * med.mrp,
+            sold_at=datetime.combine(as_of - timedelta(days=days_ago), datetime.min.time()),
+        )
+        db.add(sale)
+        db.flush()
+        db.add(
+            SaleItem(
+                sale_id=sale.id,
+                medicine_id=med.id,
+                batch_id=from_batch.id,
+                quantity=units,
+                unit_price=med.mrp,
+                line_total=Decimal(units) * med.mrp,
+            )
+        )
+
+    # 180 units over 90 days = 2/day.
+    sell(paracetamol, batches["P1"], 180, days_ago=30)
+    # 900 units over 90 days = 10/day.
+    sell(vitamin_c, batches["V1"], 900, days_ago=30)
+    # Cough syrup sold once, but long before the lookback window opens: it has
+    # history, yet zero recent demand. A different case from "never sold".
+    sell(cough_syrup, batches["C1"], 50, days_ago=200)
+    # Amoxicillin: deliberately never sold.
+
+    db.commit()
+
+    return {
+        "paracetamol": paracetamol,
+        "amoxicillin": amoxicillin,
+        "vitamin_c": vitamin_c,
+        "cough_syrup": cough_syrup,
+        "far_future": far_future,
+        "batches": batches,
+    }
