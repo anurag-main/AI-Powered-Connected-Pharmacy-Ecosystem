@@ -12,6 +12,7 @@ from app.core.middleware import RequestContextMiddleware
 from app.core.tracing import log_tracing_status
 from app.routers import billing as billing_router
 from app.routers import business as business_router
+from app.routers import expiry as expiry_router
 from app.routers import medicines as medicines_router
 from app.routers import reorder as reorder_router
 from app.routers import tool_agent as tool_agent_router
@@ -85,6 +86,7 @@ app.include_router(medicines_router.router)
 app.include_router(billing_router.router)
 app.include_router(reorder_router.router)
 app.include_router(business_router.router)
+app.include_router(expiry_router.router)
 
 # Native LangGraph Tool Calling Agent
 app.include_router(tool_agent_router.router)
