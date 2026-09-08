@@ -39,9 +39,11 @@ pharmacy-core-backend/memory_db/
 # ---------- Personal AI-coaching framework (kept local, not shared) ----------
 .claude/
 CLAUDE.md
-agents/
-hooks/
-skills/
+# Anchored to the repo root: an unanchored `agents/` also matches docs/agents/,
+# which silently kept the per-agent documentation out of the repo.
+/agents/
+/hooks/
+/skills/
 
 # ---------- Local-only scratch / notes ----------
 help.txt

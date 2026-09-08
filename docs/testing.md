@@ -16,7 +16,7 @@ pip install -r requirements-dev.txt
 pytest                          # everything
 pytest tests/unit               # fast, no I/O beyond SQLite
 pytest tests/integration        # graph + HTTP boundaries
-pytest tests/evaluation         # BI golden set
+pytest tests/evaluation         # BI + expiry golden sets
 pytest -m known_gap             # only the tests that pin known defects
 pytest -k margin                # by name
 ```
@@ -24,8 +24,10 @@ pytest -k margin                # by name
 The human-readable evaluation report:
 
 ```powershell
-python -m tests.evaluation.runner          # fake LLM — free, offline, deterministic
-python -m tests.evaluation.runner --real   # real provider — costs money
+python -m tests.evaluation.runner                 # BI set, fake LLM, offline
+python -m tests.evaluation.runner --real          # BI set against a real provider
+python -m tests.evaluation.expiry_runner          # expiry set, fake LLM, offline
+python -m tests.evaluation.expiry_runner --real   # expiry set against a real provider
 ```
 
 No test makes a network call. `pytest` needs no API key and no MySQL.
@@ -117,7 +119,19 @@ Fixtures: `db_session` (raw session) · `seeded_db` (scenario loaded) · `seeded
 
 ---
 
-## The golden set
+## The golden sets
+
+Two, with different powers.
+
+**BI** (`golden_cases.json`, 33 cases) grades the *pipeline*, because the BI agent's
+answers depend on what the model decides to fetch.
+
+**Expiry** (`expiry_risk_cases.json`, 16 cases) grades *actual computed values* — excess
+counts, rupees at risk, which batch ranks first. That is only possible because the expiry
+calculation is deterministic: given the same stock and sales, the report is byte-identical
+however the model phrases it. It is a correctness suite, not just a plumbing check.
+
+### The BI set
 
 `tests/evaluation/golden_cases.json` — 33 cases across sales, purchases, returns, expiry,
 margin, business health, date filtering, ranking, grouping, combined queries, off-topic,
@@ -204,11 +218,13 @@ tests/
 ├── conftest.py              fixtures: engine, clean_database, db_session, fake_llm, client
 ├── fakes.py                 FakeLLM, FakeMemoryRepository
 ├── factories.py             the fixed scenario + EXPECTED figures
-├── unit/                    301 tests — repository, business query validation, period
-│                                       resolution, tools, nodes, memory policy, reorder
+├── unit/                    431 tests — BI repository + query validation + period
+│                                       resolution, expiry risk service + repository +
+│                                       query, tools, nodes, memory policy, reorder
 │                                       maths, correlation context, tracing config
-├── integration/             50 tests — full graph, HTTP endpoint, observability chain
-└── evaluation/              37 tests — golden set + harness self-checks
+├── integration/             72 tests — BI graph, expiry graph, HTTP endpoints,
+│                                       observability chain
+└── evaluation/              57 tests — BI + expiry golden sets, harness self-checks
     ├── golden_cases.json
     ├── runner.py            also runnable as `python -m tests.evaluation.runner`
     └── test_bi_golden_cases.py
