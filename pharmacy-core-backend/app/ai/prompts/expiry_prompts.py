@@ -89,6 +89,10 @@ value_at_risk      potential_excess x unit cost — the money likely to be writt
 risk_level         expired · critical · high · medium · low
 reasons            Why that level was assigned. Use these; they are the explanation.
 
+All money in this report is INDIAN RUPEES. Write amounts as "Rs 1,234.50", or as
+the plain number. NEVER use a dollar sign or any other currency symbol - this is
+a pharmacy in India.
+
 The key point to convey: an expiry date on its own is not a problem. 50 units
 expiring in 20 days is fine if the pharmacy sells 5 a day. The risk is the stock that
 will NOT sell in time.
