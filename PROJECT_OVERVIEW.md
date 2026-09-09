@@ -127,7 +127,7 @@ graph TD
 | Containers | Docker + Docker Compose | ⛔ planned (Phase 4) |
 | CI/CD | GitHub Actions | ⛔ planned (Phase 7) |
 | Deployment | Ubuntu VPS + NGINX + Let's Encrypt SSL | ⛔ planned (Phase 8) |
-| Voice STT | OpenAI Whisper API | ⛔ planned (Phase 9); browser Web Speech API used today |
+| Voice STT | OpenAI Whisper API | ⛔ planned (Phase 9); browser Web Speech API removed from the UI 2026-09-09 |
 
 ---
 
@@ -482,6 +482,8 @@ Base: `http://localhost:8000` · Docs: `/docs` · Health: `GET /health`
 | POST | `/api/v1/reorder/approve` | Idempotently approve a proposal → `reorder_requests` |
 | POST | `/api/v1/business/analyze` | Ask the BI agent a business question |
 | POST | `/api/v1/expiry/analyze` · `/report` · `/explain` | Ask the Expiry Risk agent what stock is at risk and what to do |
+| GET | `/api/v1/sales` | Saved invoices, newest first, paged (`limit`, `offset`) |
+| GET | `/api/v1/sales/{sale_id}` | One invoice with its line items, priced as charged |
 | POST | `/tool-agent/chat` | Same questions via the native tool-calling agent |
 
 ---
@@ -494,27 +496,44 @@ shadcn-style primitives (CVA + Radix), UI shell ported from an earlier project.
 ```text
 pages/
 ├── _app.jsx, _document.jsx
-├── index.jsx        # voice billing screen (the main flow)
+├── index.jsx        # New Bill — manual line-by-line billing (the main flow)
 ├── medicines.jsx    # catalogue
-├── sales.jsx        # sales history
-└── reorder.jsx      # reorder suggestions + approve
+├── sales.jsx        # sales history — paged invoice list, expandable lines
+├── reorder.jsx      # reorder suggestions + approve
+└── expiry.jsx       # Expiry Risk dashboard
 
 src/components/
-├── VoiceButton.jsx          # mic capture
-├── BillTable.jsx            # editable bill lines
-├── ConfirmSuggestions.jsx   # low-confidence matches → owner confirms
-├── NotFoundWarnings.jsx     # medicines that could not be matched
-├── Receipt.jsx              # printable receipt
+├── billing/
+│   ├── MedicinePicker.jsx   # searchable catalogue selector (keyboard-first)
+│   ├── BillTable.jsx        # editable bill lines
+│   └── Receipt.jsx          # printable receipt
+├── expiry/
+│   ├── ExpiryFilters.jsx, ExpirySummaryCards.jsx
+│   ├── ExpiryRiskTable.jsx, ExpiryAiSummary.jsx, RiskBadge.jsx
 ├── DashboardLayout.jsx, sidebar.jsx, Logo.jsx
 └── ui/                      # button, card, input, badge, avatar, label, skeleton, textarea, icon
 
+src/hooks/
+├── useMedicineCatalog.js     # loads the catalogue once for the picker
+└── useExpiryRisk.js          # the expiry page's two-call sequence
+
 src/lib/
-├── api.js                    # fetch client for the FastAPI backend
-├── useSpeechRecognition.js   # browser Web Speech API hook
+├── api/
+│   ├── client.js             # shared fetch: never throws, shapes every error
+│   ├── index.js              # medicines, reorder + re-exports
+│   ├── billing.js            # catalogue, per-line pricing, confirm
+│   ├── sales.js              # invoice history (read-only)
+│   └── expiry.js             # deterministic report + AI explanation
 └── utils.js                  # cn() helper
 ```
 
-**The voice billing flow:**
+**Billing is manual, not voice.** Browser speech recognition was removed from the
+frontend on 2026-09-09: the accuracy ceiling made it a demo feature rather than
+something a pharmacist would bill a queue with. The screen is now search → quantity →
+add → print. The backend's free-text `/quote` pipeline is untouched and still
+available; nothing in the UI calls it.
+
+**The billing flow:**
 
 ```mermaid
 sequenceDiagram
@@ -523,17 +542,18 @@ sequenceDiagram
     participant API as FastAPI
     participant DB as MySQL
 
-    P->>UI: press mic, speak the order
-    UI->>UI: Web Speech API to transcript
-    UI->>API: POST /billing/quote {text}
-    API->>DB: match + FEFO + price
-    API-->>UI: preview lines + low-confidence suggestions + not-found list
-    UI-->>P: editable bill table
-    P->>UI: fix/confirm uncertain items, adjust quantities
+    P->>UI: search a medicine, set quantity, Add
+    UI->>API: POST /billing/price-item {medicine_id, quantity}
+    API->>DB: pick FEFO batch, read MRP
+    API-->>UI: priced line (batch, expiry, unit price)
+    UI-->>P: line appears on the bill
+    Note over P,UI: repeat per medicine
+    P->>UI: Save Bill
     UI->>API: POST /billing/confirm {items}
     API->>DB: re-price server-side, write sale atomically
     API-->>UI: sale id + totals
-    UI-->>P: printable receipt
+    UI-->>P: invoice number, bill locks
+    P->>UI: Print Receipt (separate, repeatable)
 ```
 
 Speech today uses the **browser Web Speech API**; Whisper STT is the Phase-9 upgrade.
@@ -617,7 +637,7 @@ c:\ai-pharmacy-ecosystem/
 | BI Agent | plan → parallel fetch → analyze → capped reflection → finalize, with conversation + long-term memory |
 | Native tool-calling agent | `ToolNode` + `tools_condition` ReAct loop over the same 5 tools |
 | Long-term memory | ChromaDB + OpenAI embeddings, extractor and persistor nodes wired into the graph |
-| Frontend | Voice billing screen, editable bill, receipt printing, medicines, sales, reorder screens |
+| Frontend | Manual billing screen, editable bill, receipt printing, medicines, sales, reorder, expiry risk dashboard |
 | Observability | request/run correlation ids, structured JSON or console logs, node/tool/LLM timing, LangSmith status reporting — `docs/observability.md` |
 | Expiry Risk Agent | Batch-level expiry risk: FEFO demand allocation, excess stock, value at risk, deterministic risk levels and ranking; the LLM only explains the computed report. Dashboard UI at `/expiry` (Next.js) — `docs/agents/expiry_risk_agent.md` |
 | Structured business queries | LLM emits a validated `BusinessQuery` (metric · dimension · period · sort · limit); dates resolved in code, all filtering/grouping/ranking in SQL — `docs/business_queries.md` |
@@ -642,7 +662,7 @@ Whisper STT · RAG drug-interaction agent · multi-agent supervisor · eval suit
 | 6 — Redis | ⛔ not started |
 | 7 — CI/CD | ⛔ not started |
 | 8 — Deployment | ⛔ not started |
-| 9 — Voice AI (Whisper) | 🟡 partial — browser Web Speech API only |
+| 9 — Voice AI (Whisper) | ⛔ not started — the browser Web Speech API prototype was removed |
 | 10 — RAG (ChromaDB) | 🟡 partial — Chroma in use for memory, not yet for drug knowledge |
 | 11 — Next.js frontend | 🟡 substantially built (4 screens working) |
 

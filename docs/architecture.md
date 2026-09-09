@@ -19,8 +19,8 @@ flowchart TB
 
     subgraph FE["Next.js frontend — pharmacy-frontend/ (Pages Router)"]
         PG["pages/ — index, medicines, reorder, sales, expiry"]
-        CMP["src/components/ — ui, expiry, billing"]
-        APIC["src/lib/api/ — client, index, expiry"]
+        CMP["src/components/ — ui, billing, expiry"]
+        APIC["src/lib/api/ — client, index, billing, sales, expiry"]
     end
 
     subgraph API["FastAPI — app/main.py"]
@@ -31,6 +31,7 @@ flowchart TB
         R4["/api/v1/business"]
         R5["/api/v1/expiry<br/>analyze · report · explain"]
         R6["/tool-agent"]
+        R7["/api/v1/sales"]
     end
 
     subgraph AI["LangGraph agents — app/ai/graphs/"]
@@ -57,6 +58,7 @@ flowchart TB
     MW --> R4
     MW --> R5
     MW --> R6
+    MW --> R7
 
     R1 --> SVC
     R2 --> G1
@@ -64,6 +66,7 @@ flowchart TB
     R4 --> G3
     R5 --> G4
     R6 --> G5
+    R7 --> SVC
 
     G1 --> SVC
     G2 --> SVC
@@ -131,7 +134,7 @@ Those are Python. The model chooses *what to ask for* and *how to say the answer
 
 | Agent | Graph | Endpoint | Shape | Docs |
 |---|---|---|---|---|
-| Billing | `billing_graph.py` | `POST /api/v1/billing/*` | quote / price / confirm split | [`02_billing_agent.md`](02_billing_agent.md) |
+| Billing | `billing_graph.py` | `POST /api/v1/billing/*` | quote / price / confirm split. UI is **manual** at `/` — it uses price-item + confirm only, never `/quote` | [`02_billing_agent.md`](02_billing_agent.md) |
 | Reorder | `reorder_graph.py` | `GET`/`POST /api/v1/reorder` | deterministic reorder suggestions | [`03_reorder_agent.md`](03_reorder_agent.md) |
 | Business Intelligence | `business_graph.py` | `POST /api/v1/business/analyze` | planner → fetcher → analyzer → reflection loop; ChromaDB memory | [`business_queries.md`](business_queries.md), [`04_bi_agent_qa_report.md`](04_bi_agent_qa_report.md) |
 | **Expiry Risk** | `expiry_graph.py` | `POST /api/v1/expiry/{analyze,report,explain}` | planner → fetcher → analyzer, no loop; planner skipped when a query is supplied. **Has a UI** at `/expiry` | [`agents/expiry_risk_agent.md`](agents/expiry_risk_agent.md) |
@@ -163,9 +166,9 @@ secrets, or exception messages from the database.
 ### Testing — [`testing.md`](testing.md)
 
 ```text
-579 passed, 5 skipped
+597 passed, 5 skipped
   unit         431
-  integration   96
+  integration  114
   evaluation    52 passed + 5 skipped
 ```
 
