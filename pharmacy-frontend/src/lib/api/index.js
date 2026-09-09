@@ -1,36 +1,16 @@
 /**
- * Billing / medicines / reorder API calls.
+ * API entry point.
  *
  * Fetch plumbing lives in ./client.js so every feature module shares one place
- * that decides what an error looks like. Feature modules sit alongside this file
- * (./expiry.js) and are re-exported at the bottom, so `@/lib/api` stays the single
- * import path for pages.
+ * that decides what an error looks like. Feature modules sit alongside it and are
+ * re-exported here, so `@/lib/api` stays the single import path for pages.
+ *
+ *   client.js    fetch, error shaping, X-Request-ID
+ *   billing.js   catalog, per-line pricing, confirm
+ *   sales.js     invoice history
+ *   expiry.js    deterministic report + AI explanation
  */
 import { getJSON, postJSON } from "./client";
-
-/** Preview: price a spoken/typed order WITHOUT saving. Always 200. */
-export function quoteSale(pharmacistInput) {
-    return postJSON("/api/v1/billing/quote", { pharmacist_input: pharmacistInput });
-}
-
-/** Finalize: persist the reviewed line items as a real sale. 201 on success. */
-export function confirmSale(items, customerName, customerPhone) {
-    return postJSON("/api/v1/billing/confirm", {
-        items,
-        customer_name: customerName || null,
-        customer_phone: customerPhone || null,
-    });
-}
-
-/** Price one medicine by id (used when the owner switches a confirm-row candidate). */
-export function priceItem(medicineId, quantity, name, unit) {
-    return postJSON("/api/v1/billing/price-item", {
-        medicine_id: medicineId,
-        quantity,
-        name,
-        unit,
-    });
-}
 
 /** List the medicine catalog (for the Medicines page). Always an array on success. */
 export async function listMedicines() {
@@ -45,7 +25,7 @@ export function getReorderSuggestions() {
 }
 
 /** Approve one proposal → persists a pending reorder request. Idempotent. */
-export async function approveReorder(proposal) {
+export function approveReorder(proposal) {
     return postJSON("/api/v1/reorder/approve", {
         medicine_id: proposal.medicine_id,
         quantity: proposal.reorder_qty,
@@ -55,6 +35,7 @@ export async function approveReorder(proposal) {
 }
 
 // ── Feature modules ──────────────────────────────────────────────────────────
-// Re-exported so pages can keep importing everything from "@/lib/api".
+export * from "./billing";
 export * from "./expiry";
+export * from "./sales";
 export { ERROR_MESSAGES } from "./client";
