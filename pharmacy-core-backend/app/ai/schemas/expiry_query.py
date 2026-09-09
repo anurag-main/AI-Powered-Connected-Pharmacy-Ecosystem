@@ -158,6 +158,15 @@ class ExpiryRiskReport(BaseModel):
 
     items: list[ExpiryRiskItem]
 
+    counts_by_risk: dict[str, int] = Field(
+        default_factory=dict,
+        description=(
+            "How many batches sit at each risk level, counted BEFORE the limit is "
+            "applied. A dashboard cannot derive these from `items` — asking for the "
+            "top 5 would make every count at most 5."
+        ),
+    )
+
     notes: list[str] = Field(
         default_factory=list,
         description=(

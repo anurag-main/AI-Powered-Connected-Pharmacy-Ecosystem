@@ -176,6 +176,7 @@ class ExpiryRiskService:
                 total_at_risk=0,
                 total_value_at_risk=0.0,
                 items=[],
+                counts_by_risk=_empty_counts(),
                 notes=["No batches expire within the requested window."],
             )
 
@@ -210,6 +211,9 @@ class ExpiryRiskService:
                 sum(item.value_at_risk for item in at_risk), 2
             ),
             items=items[: query.limit],
+            # Counted over the filtered-but-unlimited set, so the dashboard's
+            # summary cards stay honest when the caller asks for the top 5.
+            counts_by_risk=_count_by_risk(items),
             notes=notes,
         )
 
@@ -440,6 +444,24 @@ class ExpiryRiskService:
         )
 
         return notes
+
+
+# ---------------------------------------------------------------------------
+# Counting
+# ---------------------------------------------------------------------------
+
+
+def _empty_counts() -> dict[str, int]:
+    """Every level present and zero, so a caller never has to guard a missing key."""
+
+    return {level.value: 0 for level in RiskLevel}
+
+
+def _count_by_risk(items: list[ExpiryRiskItem]) -> dict[str, int]:
+    counts = _empty_counts()
+    for item in items:
+        counts[item.risk_level.value] += 1
+    return counts
 
 
 # ---------------------------------------------------------------------------
