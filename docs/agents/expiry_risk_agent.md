@@ -2,13 +2,15 @@
 
 > Code-level documentation. Every file, class and function named here exists in the
 > repository and was verified against the source while this was written.
-> Root for all paths: `pharmacy-core-backend/`.
+> Backend paths are relative to `pharmacy-core-backend/`, frontend paths to
+> `pharmacy-frontend/`.
 
 | | |
 |---|---|
 | Agent name | `expiry` (`AGENT_NAME` in `app/ai/graphs/expiry_graph.py`) |
 | Version | `expiry-agent-v1` (`AGENT_VERSION`, same file) |
-| Endpoint | `POST /api/v1/expiry/analyze` |
+| Endpoints | `POST /api/v1/expiry/report` (deterministic) · `/explain` (prose) · `/analyze` (chat) |
+| Frontend | `pages/expiry.jsx` — Next.js Pages Router |
 | Graph | `START -> planner -> fetcher -> analyzer -> END` |
 | Tools | one: `get_expiry_risk` |
 | Writes to the database | none — read-only |
@@ -82,7 +84,9 @@ A date-only report puts these side by side. This agent does not.
 
 ```mermaid
 flowchart TD
-    UI["Next.js<br/>(not yet wired to this endpoint)"]
+    UI["pages/expiry.jsx<br/>Next.js Pages Router"]
+    HOOK["useExpiryRisk()"]
+    APICLIENT["lib/api/expiry.js"]
     API["FastAPI<br/>app/routers/expiry.py"]
     SVC["ExpiryAgentService<br/>app/services/expiry_agent_service.py"]
     GRAPH["LangGraph<br/>app/ai/graphs/expiry_graph.py"]
@@ -95,7 +99,9 @@ flowchart TD
     DB[("MySQL<br/>batches / sales / sale_items / medicines")]
     LLM["OpenAI gpt-4o-mini<br/>app/ai/llm.py"]
 
-    UI --> API
+    UI --> HOOK
+    HOOK --> APICLIENT
+    APICLIENT --> API
     API --> SVC
     SVC --> GRAPH
     GRAPH --> PLAN
@@ -111,9 +117,11 @@ flowchart TD
     classDef det fill:#d6f5d6,stroke:#227722,stroke-width:2px,color:#000
     classDef ai fill:#ffe0b3,stroke:#cc7000,stroke-width:2px,color:#000
     classDef data fill:#dbe7ff,stroke:#2b5fbf,stroke-width:2px,color:#000
+    classDef fe fill:#f3e8ff,stroke:#7c3aed,stroke-width:2px,color:#000
     class RISK,REPO,TOOL det
     class LLM,PLAN,ANA ai
     class DB data
+    class UI,HOOK,APICLIENT fe
 ```
 
 Green is deterministic, orange touches the model, blue is data. The money is computed
@@ -213,10 +221,204 @@ The figures in the JSON response **never pass through the model**.
 | `app/models/batch.py` · `medicine.py` · `sale.py` · `sale_item.py` | ORM models. Unchanged by this milestone |
 | `app/core/time_range.py` | `today()` — the reference date, in the pharmacy's timezone |
 | `app/ai/observability.py` | `ai_run`, `observe_node`, `observe_tool` — reused unchanged |
+| *(frontend)* | see §6 — `pharmacy-frontend/pages/expiry.jsx` and below |
 
 ---
 
-## 6. Code-Level Entry Point
+## 6. Frontend Architecture
+
+> Root for frontend paths: `pharmacy-frontend/`.
+
+The page is a **pharma operations screen**, not a chat window. The pharmacist picks
+filters and reads a ranked table; the AI adds a paragraph beside it.
+
+| File | Responsibility |
+|---|---|
+| `pages/expiry.jsx` | The route. Owns filter state, chooses which of loading / error / empty / results to render. Opts into the app shell via `ExpiryPage.getLayout` |
+| `src/hooks/useExpiryRisk.js` | `useExpiryRisk()` — owns the two-call sequence and six pieces of state (`report`, `loading`, `error`, `explanation`, `explaining`, `explainError`) |
+| `src/lib/api/expiry.js` | `getExpiryReport()`, `explainExpiryRisk()`, `toQuery()`, and the filter option lists |
+| `src/lib/api/client.js` | Shared fetch plumbing. Never throws; always returns `{ ok, status, data, requestId, error }` |
+| `src/lib/api/index.js` | The existing billing / medicines / reorder calls, now on the same client, re-exporting `./expiry` so `@/lib/api` stays one import path |
+| `src/components/expiry/ExpiryFilters.jsx` | Window / risk level / limit selects and the Analyze button |
+| `src/components/expiry/ExpirySummaryCards.jsx` | The four KPI cards, plus `ExpirySummaryCardsSkeleton` |
+| `src/components/expiry/ExpiryRiskTable.jsx` | The ranked table with an expandable "why" row. Exports `ExpiryRiskTableSkeleton` and `ExpiryRiskEmpty` |
+| `src/components/expiry/ExpiryAiSummary.jsx` | The AI paragraph and the report's data caveats |
+| `src/components/expiry/RiskBadge.jsx` | `RiskBadge` and `riskStyle()` — one place that maps a risk level to colour and wording |
+| `src/components/sidebar.jsx` | Gains the `/expiry` nav entry |
+
+### Two calls, not one
+
+This is the decision the whole page is built around.
+
+```text
+Analyze pressed
+   |
+   +-- POST /api/v1/expiry/report    ~180 ms, no LLM, free
+   |      -> cards + table render immediately
+   |
+   +-- POST /api/v1/expiry/explain   ~11 s, one model call
+          -> paragraph fills in above the table
+```
+
+The obvious design is one endpoint returning numbers and prose together. It is worse
+for three reasons, each of which showed up in practice:
+
+1. **The table would wait on the model.** Measured on real data: 180 ms versus 11.5 s.
+   Bundling them makes the fast half as slow as the slow half.
+2. **An outage would cost the report, not just the paragraph.**
+   `test_the_table_still_loads_when_the_model_is_down` pins this.
+3. **The prose could contradict the filters.** `/analyze` runs a planner that picks
+   its own window from a sentence. The dashboard already *has* the window — it came
+   from a dropdown. Sending both endpoints the same structured query, and letting the
+   backend skip its planner, is what guarantees the paragraph describes the rows on
+   screen.
+
+`useExpiryRisk` therefore keeps `error` and `explainError` apart: the first replaces
+the page, the second is a line inside the AI card and nothing else changes.
+
+### State
+
+| State | Owner | Notes |
+|---|---|---|
+| `filters` | `pages/expiry.jsx` | `{ windowDays, riskLevel, limit }`. Changing a select does **not** fetch — three adjustments would otherwise cost three reports |
+| `report` | `useExpiryRisk` | The whole `/report` body. The only source of numbers on the page |
+| `loading` / `error` | `useExpiryRisk` | Fatal path: replaces the results area |
+| `explanation` / `explaining` / `explainError` | `useExpiryRisk` | Non-fatal: confined to the AI card |
+
+Two guards in the hook, both for real races: a `runIdRef` counter so a slow first
+response cannot paint over a fast second one when Analyze is pressed twice, and a
+`mountedRef` so a late response never calls `setState` after navigation.
+
+### Loading, error and empty
+
+| State | What the user sees |
+|---|---|
+| Loading | Skeleton cards and skeleton table rows, matching the real layout — no blank screen, no layout jump |
+| Loading (AI) | Three shimmer lines inside the AI card, `aria-live="polite"`, while the table is already usable |
+| Network failure | "Cannot reach the server. Check that the backend is running." + Try again |
+| Validation (422) | "That request was not valid. Try different filters." |
+| Server (5xx) | "The server could not complete this request." + Try again |
+| AI failure | Inline: "…The figures above are unaffected — they are calculated without the AI." |
+| Empty | "No stock is at expiry risk in this view." with the window and level spelled out, and a hint to widen the filter |
+
+Backend exception text and SQL never reach the screen. `client.js` maps a status to
+one of four fixed sentences; the server's own `detail` is not rendered.
+
+When an error carries a `requestId` (from the `X-Request-ID` response header) the page
+prints it small under the message, so a bug report can quote it and the whole run can
+be grepped out of the backend logs.
+
+### What the frontend does not do
+
+It does not compute risk, demand, excess, value, ranking or counts. The summary cards
+read `counts_by_risk` and `total_*` from the response rather than counting rows,
+because rows are truncated by `limit` — asking for the top 5 would otherwise cap every
+card at 5. `test_counts_survive_a_limit` exists for exactly this.
+
+The table does not re-sort. Row order is the backend's ranking, and a client that
+reordered it would silently disagree with the paragraph above it.
+
+---
+
+## 7. Frontend File-by-File Flow
+
+```text
+User picks filters, presses Analyze
+        |
+pages/expiry.jsx                 filters state -> analyze(filters)
+        |
+src/hooks/useExpiryRisk.js       useExpiryRisk().analyze()
+        |
+src/lib/api/expiry.js            toQuery(filters) -> ExpiryRiskQuery body
+        |                        getExpiryReport(query)
+        |                        explainExpiryRisk(query)
+        |
+src/lib/api/client.js            postJSON() -> fetch
+        |
+POST /api/v1/expiry/report       (and /explain)
+```
+
+and back:
+
+```text
+JSON response
+        |
+src/lib/api/client.js            { ok, status, data, requestId, error }
+        |
+src/lib/api/expiry.js            passthrough - no reshaping, no computation
+        |
+src/hooks/useExpiryRisk.js       setReport() / setExplanation()
+        |
+pages/expiry.jsx                 picks loading | error | empty | results
+        |
+        +-- ExpirySummaryCards   counts_by_risk, total_value_at_risk
+        +-- ExpiryAiSummary      explanation.answer, report.notes
+        +-- ExpiryRiskTable      report.items, in the given order
+        |
+User
+```
+
+---
+
+## 8. Complete Round Trip — User to Database and Back
+
+```mermaid
+sequenceDiagram
+    actor U as Pharmacist
+    participant P as expiry.jsx
+    participant H as useExpiryRisk
+    participant C as api/client.js
+    participant R as routers/expiry.py
+    participant S as ExpiryAgentService
+    participant G as expiry graph
+    participant T as run_expiry_risk
+    participant V as ExpiryRiskService
+    participant Q as ExpiryRepository
+    participant D as MySQL
+
+    U->>P: picks 30 days, presses Analyze
+    P->>H: analyze(filters)
+
+    H->>C: POST /expiry/report
+    C->>R: ExpiryRiskQuery
+    R->>S: service.report(query)
+    S->>T: run_expiry_risk(query)
+    T->>V: assess(query)
+    V->>Q: batches_in_window / recent_demand
+    Q->>D: SELECT
+    D-->>Q: rows
+    Q-->>V: BatchStock list
+    V-->>T: ExpiryRiskReport
+    T-->>S: report
+    S-->>R: ExpiryReportResponse
+    R-->>C: 200 plus X-Request-ID
+    C-->>H: ok, data, requestId
+    H-->>P: report
+    P-->>U: cards and ranked table, about 180 ms
+
+    H->>C: POST /expiry/explain, same query
+    C->>R: ExpiryRiskQuery
+    R->>S: service.explain(query)
+    S->>G: invoke with query pre-seeded
+    Note over G: planner SKIPPED
+    G->>T: run_expiry_risk(query)
+    T-->>G: same report
+    G-->>S: answer and confidence
+    S-->>R: ExpiryExplanationResponse
+    R-->>C: 200
+    C-->>H: ok, data
+    H-->>P: explanation
+    P-->>U: AI paragraph appears, about 11 s
+```
+
+The second call re-runs the calculation rather than passing the first result back
+down. That is a deliberate trade: one extra sub-second query in exchange for never
+trusting a client-supplied report — a browser could otherwise post edited figures and
+have the model narrate them as fact.
+
+---
+
+## 9. Code-Level Entry Point
 
 `app/routers/expiry.py`:
 
@@ -234,19 +436,36 @@ def analyze_expiry_risk(
     return service.analyze(request)
 ```
 
-1. **Who calls it** — any HTTP client. The frontend is not yet wired to it; today's
-   callers are the integration tests and manual `curl`/Swagger.
+1. **Who calls it** — any HTTP client asking a free-text question. The dashboard does
+   **not**; it uses `/report` and `/explain` below.
 2. **Request schema** — `ExpiryAnalysisRequest`.
 3. **What it calls** — `ExpiryAgentService.analyze()`, resolved through
    `Depends(get_expiry_agent_service)` so a test can override the dependency.
 4. **What it returns** — `ExpiryAnalysisResponse`.
+
+### All three routes
+
+| Route | Body | Service | LLM calls | Used by |
+|---|---|---|---|---|
+| `POST /api/v1/expiry/analyze` | `ExpiryAnalysisRequest` (question + thread_id) | `analyze()` | 2 (planner, analyst) | chat / API clients |
+| `POST /api/v1/expiry/report` | `ExpiryRiskQuery` | `report()` | **0** | the dashboard table and cards |
+| `POST /api/v1/expiry/explain` | `ExpiryRiskQuery` | `explain()` | 1 (analyst only) | the dashboard AI card |
+
+`/report` and `/explain` take **`ExpiryRiskQuery` itself** as the request body — the
+same model the tool uses. The HTTP contract and the agent's contract therefore cannot
+drift apart, and every bound on the query is enforced at the edge.
+
+`explain()` seeds `query` into the initial graph state, which makes `_entry_point`
+route `START` straight to `fetcher`. Same nodes, same prompt, same observability as
+the chat path; one fewer model call, and no chance of the planner choosing a window
+that disagrees with the dropdown.
 
 The route is a pass-through by design: no branching, no error handling of its own, so
 there is nothing in it that can be wrong independently of the service.
 
 ---
 
-## 7. Request Schema
+## 10. Request Schema
 
 ```text
 HTTP JSON body
@@ -288,7 +507,7 @@ never its results.
 
 ---
 
-## 8. LangGraph Flow
+## 11. LangGraph Flow
 
 ```mermaid
 flowchart LR
@@ -370,7 +589,7 @@ duplicate-message problem the BI agent's finalizer exists to prevent.
 
 ---
 
-## 9. Agent State
+## 12. Agent State
 
 `app/ai/state/expiry_state.py`:
 
@@ -404,7 +623,7 @@ checkpointed transcript.
 
 ---
 
-## 10. Tool Flow
+## 13. Tool Flow
 
 ```text
 analyzer/fetcher
@@ -440,7 +659,7 @@ layers down.
 
 `run_expiry_risk` opens its own `SessionLocal()` because LangGraph nodes do not
 receive FastAPI's `Depends(get_db)`. It takes an optional `as_of` for testing; the
-graph never passes one (see §24).
+graph never passes one (see §27).
 
 The `@tool`-decorated `get_expiry_risk` is registered in `EXPIRY_TOOLS` for a future
 tool-calling or Supervisor graph. **The current graph does not use it** — the fetcher
@@ -452,7 +671,7 @@ or alter any figure; or invoke anything that writes.
 
 ---
 
-## 11. Database Flow
+## 14. Database Flow
 
 ```text
 ExpiryRepository
@@ -512,11 +731,11 @@ No new index was added, and no migration was needed.
 **per batch**, demand is **per medicine**. A customer asks for "Crocin", and FEFO
 decides which batch it comes out of. Joining them would force a choice between
 duplicating demand across a medicine's batches or dividing it arbitrarily, and both
-are wrong. The service allocates instead — see §12.
+are wrong. The service allocates instead — see §15.
 
 ---
 
-## 12. SQL vs Python vs LLM
+## 15. SQL vs Python vs LLM
 
 ```text
 SQL      fetch batches in the window (with medicine name)
@@ -627,7 +846,7 @@ runtime.
 
 ---
 
-## 13. LLM Flow
+## 16. LLM Flow
 
 ```text
 User question
@@ -678,7 +897,7 @@ Two prompt clauses do real work:
 
 ---
 
-## 14. What the LLM Does vs Does Not Do
+## 17. What the LLM Does vs Does Not Do
 
 ### LLM DOES
 
@@ -705,7 +924,7 @@ figure could put it in the prose but could never change `items`, `total_at_risk`
 
 ---
 
-## 15. Observability Flow
+## 18. Observability Flow
 
 Reuses the Milestone 2 infrastructure unchanged.
 
@@ -761,7 +980,7 @@ reports at boot whether traces are genuinely being sent, because an API key with
 
 ---
 
-## 16. Error Flow
+## 19. Error Flow
 
 ### LLM fails (planner or analyzer)
 
@@ -816,19 +1035,36 @@ half-computed risk report that looks complete is worse than an error.
 
 ---
 
-## 17. Test Flow
+## 20. Test Flow
 
 ```text
-Unit          tests/unit/test_expiry_risk_service.py    65
-              tests/unit/test_expiry_query.py           44
-              tests/unit/test_expiry_repository.py      21
+Unit          tests/unit/test_expiry_risk_service.py         65
+              tests/unit/test_expiry_query.py                44
+              tests/unit/test_expiry_repository.py           21
     v
-Integration   tests/integration/test_expiry_agent.py    22
+Integration   tests/integration/test_expiry_agent.py         22
+              tests/integration/test_expiry_dashboard_api.py 24
     v
-Evaluation    tests/evaluation/test_expiry_golden_cases.py  20
-                                                        ---
-                                                        172
+Evaluation    tests/evaluation/test_expiry_golden_cases.py   20
+                                                             ---
+                                                             196
 ```
+
+`test_expiry_dashboard_api.py` covers the two endpoints the UI uses. Three of its
+assertions are load-bearing for the frontend and would be easy to lose:
+
+* `test_the_report_endpoint_calls_no_model` — the fake LLM is scripted with nothing,
+  so any model call raises. This is what keeps the table free.
+* `test_explain_skips_the_planner` — the planner is never scripted either, so reaching
+  it fails the test. This is what keeps the prose and the filters in agreement.
+* `test_counts_survive_a_limit` — ask for the top 1 and the table has one row, but the
+  summary cards must still report all four at-risk batches.
+
+**Frontend tests: none yet.** `pharmacy-frontend` has no test runner installed (no
+Jest, no Vitest, no Testing Library), so there is nothing to add them to. The six
+checks the standard asks for — loading, success, empty, error, correct parameters
+sent, backend values displayed — are not covered. Standing up Vitest + React Testing
+Library is the next frontend task; this is a real gap, not a deliberate omission.
 
 **Fake LLM** — `tests/fakes.py::FakeLLM` implements the slice of `BaseChatModel` the
 nodes use. `with_structured_output(schema)` returns a scripted instance per schema, so
@@ -871,7 +1107,7 @@ seeding helpers the other agents use, and each row exists to pin one behaviour.
 
 ---
 
-## 18. Evaluation
+## 21. Evaluation
 
 ```text
 question  ->  scripted planner (planned_query)  ->  deterministic pipeline
@@ -910,13 +1146,15 @@ are ever dropped.
 
 ---
 
-## 19. Security
+## 22. Security
 
 **Authentication and authorization do not exist in this project yet.** There is no
 auth module, no `get_current_user` dependency, and no RBAC anywhere in `app/`. This
 endpoint is **unauthenticated**, like every other endpoint here. Auth is Phase 5 on
-the roadmap. This is stated plainly rather than glossed, because the endpoint exposes
-`cost_price` — an internal figure — through `unit_cost` and `value_at_risk`.
+the roadmap. This is stated plainly rather than glossed, because these endpoints
+expose `cost_price` — an internal figure — through `unit_cost` and `value_at_risk`,
+and the dashboard now puts that on a screen. Anyone who can reach the host can read
+the pharmacy's margins. Do not deploy this before Phase 5.
 
 | Control | Status |
 |---|---|
@@ -928,6 +1166,8 @@ the roadmap. This is stated plainly rather than glossed, because the endpoint ex
 | Write protection | The agent has no write path at all |
 | Secret handling | Keys read from env in `app/ai/config.py`; none in code, logs or docs |
 | Logging restrictions | No names, quantities, money, prompts, tool args or results — asserted by test |
+| Client-supplied figures | Never trusted. `/explain` recomputes the report rather than accepting one from the browser |
+| Error text to the browser | Mapped to four fixed sentences in `lib/api/client.js`; backend `detail`, tracebacks and SQL are never rendered |
 | CORS | Origin allowlist in `app/main.py`; `X-Request-ID` explicitly exposed |
 | Request id injection | An inbound `X-Request-ID` is honoured only if it matches `^[A-Za-z0-9_-]{1,64}$`; otherwise a fresh one is generated |
 
@@ -938,10 +1178,20 @@ in which arbitrary text can travel further, and the analyzer never executes anyt
 
 ---
 
-## 20. Performance
+## 23. Performance
 
-**Not yet measured.** No benchmark has been run against a production-sized dataset, so
-no figures are claimed here.
+**Lightly measured, not benchmarked.** The figures below come from single manual calls
+against the development MySQL database (261 batches, 1,812 sale items) — indicative,
+not a benchmark, and no load test has been run.
+
+| Call | Observed | Notes |
+|---|---|---|
+| `POST /report` (30d, top 5) | **179 ms** | 3 queries, no model |
+| `POST /report` (empty window) | **4 ms** | early return before the demand queries |
+| `POST /explain` (same query) | **11.5 s** | one `gpt-4o-mini` call, dominates everything |
+
+The 60x gap between the two is the entire justification for the dashboard making two
+calls instead of one.
 
 What is known from the code:
 
@@ -966,7 +1216,7 @@ What is known from the code:
 
 ---
 
-## 21. Example End-to-End Request
+## 24. Example End-to-End Request
 
 ```http
 POST /api/v1/expiry/analyze
@@ -1045,12 +1295,16 @@ should.
 
 ---
 
-## 22. How to Debug This Feature
+## 25. How to Debug This Feature
 
 Work down the stack. Each step tells you whether to keep going.
 
 | # | Layer | File | What to check |
 |---|---|---|---|
+| 0a | Browser | devtools Network | Did `/report` 200? Its `X-Request-ID` is the thread to pull |
+| 0b | Page | `pages/expiry.jsx` | Which branch rendered — loading, error, empty, results? |
+| 0c | Hook | `src/hooks/useExpiryRisk.js` | `error` is fatal; `explainError` only blanks the AI card |
+| 0d | Client | `src/lib/api/client.js` | `status: 0` means the request never left — backend down or CORS |
 | 1 | Route | `app/routers/expiry.py` | Is it a `422`? Then the body is wrong — nothing else ran |
 | 2 | Service | `app/services/expiry_agent_service.py` | Did `ai_run_started` appear? If not, the graph was never invoked |
 | 3 | Graph | `app/ai/graphs/expiry_graph.py` | Which `node_completed` lines appear, and which node is missing |
@@ -1084,7 +1338,7 @@ risk.
 
 ---
 
-## 23. Common Failure Modes
+## 26. Common Failure Modes
 
 **No results at all**
 1. Does any batch actually expire within the window? (`SELECT MIN(expiry_date) FROM batches`)
@@ -1122,9 +1376,30 @@ not the definition site.
 Use `expiry_app_db` (real `today()`), not `expiry_db` (fixed date), for anything that
 runs through the graph.
 
+**The page shows "Cannot reach the server"**
+1. Is the backend up on the port in `pharmacy-frontend/.env.local`
+   (`NEXT_PUBLIC_API_BASE_URL`, default `http://localhost:8000`)?
+2. CORS — `_ALLOWED_ORIGINS` in `app/main.py` lists ports 3000 and 3001 only
+3. `status: 0` from the client means the request never left the browser
+
+**The summary cards disagree with the table**
+Expected when `limit` truncates: cards count the whole filtered result, the table
+shows the top N. If they disagree with `limit: 100` and fewer rows than that, the
+frontend is deriving a count it should be reading.
+
+**The AI paragraph contradicts the filters**
+The planner ran when it should have been skipped. Check that `/explain` was called
+with the query object, not a question, and that `_entry_point` still routes a
+pre-seeded `query` to `fetcher`.
+
+**Prices show a dollar sign**
+The analyst prompt states the currency is rupees. The model observed this only after
+the prompt was fixed *and the server restarted* — `uvicorn` without `--reload` keeps
+the old prompt module in memory.
+
 ---
 
-## 24. Future Extensions
+## 27. Future Extensions
 
 | Today | Later |
 |---|---|
@@ -1145,7 +1420,7 @@ clearly-labelled capability.
 
 ---
 
-## 25. How I would explain this in an interview
+## 28. How I would explain this in an interview
 
 **The problem.** A pharmacy writes off stock that expires on the shelf. The obvious
 tool is an expiry report, and it is close to useless, because it flags fast-moving
@@ -1214,13 +1489,15 @@ tool is a read, and a test asserts no recommendation claims a completed action.
 
 ---
 
-## 26. Verification
+## 29. Verification
 
-Everything in this document was checked against the source on 2026-09-08. The claims
+Everything in this document was checked against the source on 2026-09-09. The claims
 most worth re-checking if the code moves:
 
 - `AGENT_NAME`, `AGENT_VERSION`, node names and edges — `app/ai/graphs/expiry_graph.py`
 - Field bounds — `app/ai/schemas/expiry_query.py`
 - Thresholds and the FEFO loop — `app/services/expiry_risk_service.py`
 - SQL filters and ordering — `app/repositories/expiry_repository.py`
-- Test counts — `pytest tests/unit/test_expiry_*.py tests/integration/test_expiry_agent.py tests/evaluation/test_expiry_golden_cases.py --collect-only -q`
+- Test counts — `pytest tests/unit/test_expiry_*.py tests/integration/test_expiry_*.py tests/evaluation/test_expiry_golden_cases.py --collect-only -q`
+- Frontend field names — every field the page reads was cross-checked against a
+  live `/report` response; all 24 matched

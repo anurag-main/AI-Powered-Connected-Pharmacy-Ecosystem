@@ -481,7 +481,7 @@ Base: `http://localhost:8000` · Docs: `/docs` · Health: `GET /health`
 | GET | `/api/v1/reorder/suggestions` | Run the reorder agent, return proposals |
 | POST | `/api/v1/reorder/approve` | Idempotently approve a proposal → `reorder_requests` |
 | POST | `/api/v1/business/analyze` | Ask the BI agent a business question |
-| POST | `/api/v1/expiry/analyze` | Ask the Expiry Risk agent what stock is at risk and what to do |
+| POST | `/api/v1/expiry/analyze` · `/report` · `/explain` | Ask the Expiry Risk agent what stock is at risk and what to do |
 | POST | `/tool-agent/chat` | Same questions via the native tool-calling agent |
 
 ---
@@ -619,7 +619,7 @@ c:\ai-pharmacy-ecosystem/
 | Long-term memory | ChromaDB + OpenAI embeddings, extractor and persistor nodes wired into the graph |
 | Frontend | Voice billing screen, editable bill, receipt printing, medicines, sales, reorder screens |
 | Observability | request/run correlation ids, structured JSON or console logs, node/tool/LLM timing, LangSmith status reporting — `docs/observability.md` |
-| Expiry Risk Agent | Batch-level expiry risk: FEFO demand allocation, excess stock, value at risk, deterministic risk levels and ranking; the LLM only explains the computed report — `docs/agents/expiry_risk_agent.md` |
+| Expiry Risk Agent | Batch-level expiry risk: FEFO demand allocation, excess stock, value at risk, deterministic risk levels and ranking; the LLM only explains the computed report. Dashboard UI at `/expiry` (Next.js) — `docs/agents/expiry_risk_agent.md` |
 | Structured business queries | LLM emits a validated `BusinessQuery` (metric · dimension · period · sort · limit); dates resolved in code, all filtering/grouping/ranking in SQL — `docs/business_queries.md` |
 | Test + evaluation foundation | 555 pytest tests (unit / integration / evaluation) against SQLite with a fake LLM — no network, no API key; plus a 33-case BI golden set and a 16-case expiry set, each with a standalone runner |
 | Documentation | 9 senior-level docs including a 42-case QA report, an architecture audit, and the testing guide |

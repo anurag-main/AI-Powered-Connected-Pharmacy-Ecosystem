@@ -5,8 +5,9 @@
 > [`AI_Pharma_15LPA_Roadmap.md`](../AI_Pharma_15LPA_Roadmap.md) and
 > [`05_architecture_audit.md`](05_architecture_audit.md).
 >
-> Last verified against the source: **2026-09-08**.
-> Root for all paths: `pharmacy-core-backend/`.
+> Last verified against the source: **2026-09-09**.
+> Backend paths are relative to `pharmacy-core-backend/`, frontend paths to
+> `pharmacy-frontend/`.
 
 ---
 
@@ -14,7 +15,13 @@
 
 ```mermaid
 flowchart TB
-    FE["Next.js frontend<br/>pharmacy-frontend/<br/>(billing UI only)"]
+    USER([Pharmacy user])
+
+    subgraph FE["Next.js frontend — pharmacy-frontend/ (Pages Router)"]
+        PG["pages/ — index, medicines, reorder, sales, expiry"]
+        CMP["src/components/ — ui, expiry, billing"]
+        APIC["src/lib/api/ — client, index, expiry"]
+    end
 
     subgraph API["FastAPI — app/main.py"]
         MW["RequestContextMiddleware<br/>request_id + access logs"]
@@ -22,7 +29,7 @@ flowchart TB
         R2["/api/v1/billing"]
         R3["/api/v1/reorder"]
         R4["/api/v1/business"]
-        R5["/api/v1/expiry"]
+        R5["/api/v1/expiry<br/>analyze · report · explain"]
         R6["/tool-agent"]
     end
 
@@ -40,7 +47,10 @@ flowchart TB
     CHROMA[("ChromaDB<br/>long-term memory")]
     LLM["OpenAI gpt-4o-mini<br/>app/ai/llm.py"]
 
-    FE --> MW
+    USER --> PG
+    PG --> CMP
+    CMP --> APIC
+    APIC --> MW
     MW --> R1
     MW --> R2
     MW --> R3
@@ -85,6 +95,11 @@ open. That is Phase 5.
 ## 2. Layers
 
 ```text
+Page          pages/                Next.js route. Owns filter/UI state.
+Component     src/components/       Presentation. Renders what the API returned.
+Hook          src/hooks/            Owns a feature's fetch sequence and its states.
+API client    src/lib/api/          The only place fetch() is called.
+                                    ---- HTTP ----
 Router        app/routers/          HTTP only. Validates, delegates, returns.
 Service       app/services/         Business logic. Owns transactions and orchestration.
 Repository    app/repositories/     SQL only. No business rules.
@@ -119,7 +134,7 @@ Those are Python. The model chooses *what to ask for* and *how to say the answer
 | Billing | `billing_graph.py` | `POST /api/v1/billing/*` | quote / price / confirm split | [`02_billing_agent.md`](02_billing_agent.md) |
 | Reorder | `reorder_graph.py` | `GET`/`POST /api/v1/reorder` | deterministic reorder suggestions | [`03_reorder_agent.md`](03_reorder_agent.md) |
 | Business Intelligence | `business_graph.py` | `POST /api/v1/business/analyze` | planner → fetcher → analyzer → reflection loop; ChromaDB memory | [`business_queries.md`](business_queries.md), [`04_bi_agent_qa_report.md`](04_bi_agent_qa_report.md) |
-| **Expiry Risk** | `expiry_graph.py` | `POST /api/v1/expiry/analyze` | planner → fetcher → analyzer, no loop | [`agents/expiry_risk_agent.md`](agents/expiry_risk_agent.md) |
+| **Expiry Risk** | `expiry_graph.py` | `POST /api/v1/expiry/{analyze,report,explain}` | planner → fetcher → analyzer, no loop; planner skipped when a query is supplied. **Has a UI** at `/expiry` | [`agents/expiry_risk_agent.md`](agents/expiry_risk_agent.md) |
 | Tool Agent (experimental) | `business_tool_graph.py` | `POST /tool-agent/...` | native LangGraph tool calling | none — **untested**, `FakeLLM` does not script tool binding |
 
 Billing is **not** being developed further as an AI agent. It stays as built; the
@@ -148,11 +163,14 @@ secrets, or exception messages from the database.
 ### Testing — [`testing.md`](testing.md)
 
 ```text
-555 passed, 5 skipped
+579 passed, 5 skipped
   unit         431
-  integration   72
+  integration   96
   evaluation    52 passed + 5 skipped
 ```
+
+**Frontend: no test runner installed yet.** Nothing in `pharmacy-frontend` is tested.
+Vitest + React Testing Library is the next frontend task.
 
 Two golden sets: BI (`golden_cases.json`, 30/30 graded) and Expiry
 (`expiry_risk_cases.json`, 14/14 graded). No test calls a real LLM provider.
@@ -189,7 +207,7 @@ Tables: `medicines`, `batches`, `customers`, `sales`, `sale_items`, `suppliers`,
 
 Drawn nowhere in this document because none of it exists:
 
-Supervisor / multi-agent routing · Forecast Agent · Inventory Risk Agent · Supplier
+Supervisor / multi-agent routing · frontend tests · Forecast Agent · Inventory Risk Agent · Supplier
 Risk Agent · Procurement Agent · human-approval workflow · audit log · authentication ·
 RBAC · RAG · Redis · MCP · Docker · CI/CD · deployment.
 
