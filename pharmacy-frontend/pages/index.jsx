@@ -1,224 +1,332 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import DashboardLayout from "@/components/DashboardLayout";
-import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import Icon from "@/components/ui/icon";
-import VoiceButton from "@/components/VoiceButton";
-import BillTable from "@/components/BillTable";
-import ConfirmSuggestions from "@/components/ConfirmSuggestions";
-import NotFoundWarnings from "@/components/NotFoundWarnings";
-import Receipt from "@/components/Receipt";
-import { useSpeechRecognition } from "@/lib/useSpeechRecognition";
-import { quoteSale, confirmSale, priceItem } from "@/lib/api";
+import MedicinePicker from "@/components/billing/MedicinePicker";
+import BillTable from "@/components/billing/BillTable";
+import Receipt from "@/components/billing/Receipt";
+import { useMedicineCatalog } from "@/hooks/useMedicineCatalog";
+import { confirmSale, priceLine, UNIT_OPTIONS } from "@/lib/api/billing";
 
+/**
+ * New Bill — manual, line-by-line billing.
+ *
+ * Pick a medicine, set a quantity, add it. The SERVER prices every line: it picks
+ * the FEFO batch and reads the MRP from the database, so no price is ever chosen
+ * in the browser. `confirm` recomputes the whole bill again before writing it.
+ *
+ * No speech recognition and no LLM anywhere in this screen.
+ */
 function NewBillPage() {
-    const { supported, listening, transcript, setTranscript, start, stop } =
-        useSpeechRecognition({ lang: "en-IN" });
+    const { medicines, loading: catalogLoading, error: catalogError, reload } =
+        useMedicineCatalog();
+
+    const [selected, setSelected] = useState(null);
+    const [quantity, setQuantity] = useState(1);
+    const [unit, setUnit] = useState("strip");
+    const [adding, setAdding] = useState(false);
 
     const [items, setItems] = useState([]);
-    const [errors, setErrors] = useState([]);
     const [customerName, setCustomerName] = useState("");
     const [customerPhone, setCustomerPhone] = useState("");
-    const [quoting, setQuoting] = useState(false);
     const [confirming, setConfirming] = useState(false);
     const [confirmedSale, setConfirmedSale] = useState(null);
-    const [banner, setBanner] = useState(null); // { kind: 'error'|'success', text }
+    const [banner, setBanner] = useState(null); // { kind: "error" | "success", text }
 
-    // ── Get Prices: speak/typed text -> /quote -> priced rows ───────────────
-    async function handleGetPrices() {
-        if (!transcript.trim()) return;
-        setQuoting(true);
+    // Row ids are local to the bill being built; the server assigns nothing until
+    // confirm, so a counter is enough and is stable across quantity edits.
+    const nextId = useRef(0);
+
+    async function handleAdd() {
+        // A saved invoice is closed. Anything else goes on a new bill.
+        if (!selected || adding || confirmedSale) return;
+
+        setAdding(true);
         setBanner(null);
-        try {
-            const { ok, data } = await quoteSale(transcript);
-            if (!ok) {
-                setBanner({ kind: "error", text: "Could not price the order. Is the backend running?" });
-                return;
-            }
-            // Tag each row with a stable id so confirmed/pending can be filtered cleanly.
-            setItems((data.items || []).map((it, idx) => ({ ...it, _id: idx })));
-            setErrors(data.errors || []);
-            if ((data.items || []).length === 0) {
-                setBanner({ kind: "error", text: "No medicines matched. Check the spelling and try again." });
-            }
-        } catch {
-            setBanner({ kind: "error", text: "Network error — is the backend running on :8000?" });
-        } finally {
-            setQuoting(false);
-        }
-    }
 
-    // Confirmed rows go on the bill; uncertain ones wait in the confirm section.
-    const billed = items.filter((it) => !it.needs_confirm);
-    const pending = items.filter((it) => it.needs_confirm);
+        const result = await priceLine({
+            medicineId: selected.id,
+            quantity: Number(quantity) || 1,
+            name: selected.name,
+            unit,
+        });
 
-    const handleQtyChange = (id, qty) =>
-        setItems((prev) => prev.map((it) => (it._id === id ? { ...it, quantity: qty } : it)));
+        setAdding(false);
 
-    const handleRemove = (id) => setItems((prev) => prev.filter((it) => it._id !== id));
-
-    // Confirm-section actions
-    const handleAccept = (id) =>
-        setItems((prev) => prev.map((it) => (it._id === id ? { ...it, needs_confirm: false } : it)));
-
-    const handleDismiss = (id) => setItems((prev) => prev.filter((it) => it._id !== id));
-
-    async function handlePickCandidate(id, candidate) {
-        const row = items.find((it) => it._id === id);
-        if (!row) return;
-        // Reprice for the newly chosen medicine (server fetches batch + MRP).
-        const { ok, data } = await priceItem(candidate.medicine_id, row.quantity, candidate.name, row.unit);
-        if (!ok) {
-            setBanner({ kind: "error", text: `${candidate.name} is out of stock.` });
+        if (!result.ok) {
+            // 422 here is a real business answer: no unexpired, in-stock batch.
+            const text =
+                result.status === 422
+                    ? `${selected.name} has no stock available.`
+                    : result.error;
+            setBanner({ kind: "error", text });
             return;
         }
-        setItems((prev) =>
-            prev.map((it) =>
-                it._id === id
-                    ? { ...it, ...data, _id: id, needs_confirm: true, matched_from: row.matched_from, candidates: row.candidates }
-                    : it
-            )
-        );
+
+        const line = result.data;
+
+        setItems((prev) => {
+            // Same medicine scanned twice is one line with a bigger quantity, the
+            // way a counter actually works — not two identical rows to reconcile.
+            const existing = prev.find((it) => it.medicine_id === line.medicine_id);
+            if (existing) {
+                return prev.map((it) =>
+                    it.medicine_id === line.medicine_id
+                        ? { ...it, quantity: it.quantity + line.quantity }
+                        : it
+                );
+            }
+            return [...prev, { ...line, _id: nextId.current++ }];
+        });
+
+        setSelected(null);
+        setQuantity(1);
     }
 
-    // ── Print Bill: reviewed rows -> /confirm -> persist -> print ───────────
-    async function handlePrintBill() {
-        if (billed.length === 0) return;
+    // After saving, the bill is a written invoice. Editing the rows on screen would
+    // show one thing and have persisted another, so the table locks.
+    const handleQtyChange = (id, qty) =>
+        !confirmedSale &&
+        setItems((prev) => prev.map((it) => (it._id === id ? { ...it, quantity: qty } : it)));
+
+    const handleRemove = (id) =>
+        !confirmedSale && setItems((prev) => prev.filter((it) => it._id !== id));
+
+    // Saving and printing are separate on purpose. Saving writes the sale and
+    // decrements stock; printing is a piece of paper. Bundling them meant a
+    // cancelled print dialog looked like a failed sale, and a reprint was
+    // impossible without billing the customer twice.
+    async function handleSaveBill() {
+        if (items.length === 0 || confirming || confirmedSale) return;
+
         setConfirming(true);
         setBanner(null);
-        try {
-            const confirmItems = billed.map((it) => ({
-                name: it.name,
-                quantity: it.quantity,
-                unit: it.unit,
-                medicine_id: it.medicine_id,
-                batch_id: it.batch_id,
-                batch_number: it.batch_number,
-                expiry_date: it.expiry_date,
-            }));
-            const { ok, data } = await confirmSale(confirmItems, customerName, customerPhone);
-            if (!ok) {
-                setBanner({ kind: "error", text: "Sale could not be finalized (stock may have changed). Try again." });
-                return;
-            }
-            setConfirmedSale(data);
-            setBanner({ kind: "success", text: `Invoice #${data.sale_id} saved — total ₹${Number(data.total_amount).toFixed(2)}.` });
-            // Let the receipt render, then open the browser print dialog.
-            setTimeout(() => window.print(), 150);
-        } catch {
-            setBanner({ kind: "error", text: "Network error during confirm." });
-        } finally {
-            setConfirming(false);
+
+        const result = await confirmSale(items, customerName, customerPhone);
+
+        setConfirming(false);
+
+        if (!result.ok) {
+            setBanner({
+                kind: "error",
+                text:
+                    result.status === 422
+                        ? "Sale could not be saved — stock may have changed since you added a line."
+                        : result.error,
+            });
+            return;
         }
+
+        setConfirmedSale(result.data);
+        setBanner({
+            kind: "success",
+            text: `Invoice #${result.data.sale_id} saved — total ₹${Number(
+                result.data.total_amount
+            ).toFixed(2)}. You can print it now, or find it later in Sales History.`,
+        });
+    }
+
+    // Print as many times as needed; it changes nothing in the database.
+    function handlePrint() {
+        if (!confirmedSale) return;
+        window.print();
     }
 
     function handleNewBill() {
         setItems([]);
-        setErrors([]);
+        setSelected(null);
+        setQuantity(1);
         setCustomerName("");
         setCustomerPhone("");
         setConfirmedSale(null);
         setBanner(null);
-        setTranscript("");
     }
 
     return (
         <div className="space-y-6">
-            {/* Header */}
-            <div className="no-print">
-                <h1 className="text-2xl sm:text-3xl font-bold tracking-tight flex items-center gap-3">
-                    <Icon name="point_of_sale" size={30} className="text-primary" />
-                    New Bill
-                </h1>
-                <p className="text-sm text-muted-foreground mt-1">
-                    Speak the order — medicines and prices fill in automatically. Review, then print.
-                </p>
+            <div className="no-print flex items-start justify-between gap-4">
+                <div>
+                    <h1 className="flex items-center gap-3 text-2xl font-bold tracking-tight sm:text-3xl">
+                        <Icon name="point_of_sale" size={30} className="text-primary" />
+                        New Bill
+                    </h1>
+                    <p className="mt-1 text-sm text-muted-foreground">
+                        Search a medicine, set the quantity, add it. Prices and batches
+                        come from the server.
+                    </p>
+                </div>
+
+                {items.length > 0 && (
+                    <Button variant="outline" size="sm" onClick={handleNewBill}>
+                        <Icon name="refresh" size={16} /> Clear bill
+                    </Button>
+                )}
             </div>
 
-            {/* Banner */}
             {banner && (
                 <div
-                    className={`no-print rounded-xl px-4 py-3 text-sm font-medium ${
+                    className={`no-print rounded-xl border px-4 py-3 text-sm font-medium ${
                         banner.kind === "success"
-                            ? "bg-emerald-50 text-emerald-700 border border-emerald-200 dark:bg-emerald-950/20 dark:text-emerald-300"
-                            : "bg-rose-50 text-rose-700 border border-rose-200 dark:bg-rose-950/20 dark:text-rose-300"
+                            ? "border-emerald-200 bg-emerald-50 text-emerald-700 dark:bg-emerald-950/20 dark:text-emerald-300"
+                            : "border-rose-200 bg-rose-50 text-rose-700 dark:bg-rose-950/20 dark:text-rose-300"
                     }`}
                 >
                     {banner.text}
                 </div>
             )}
 
-            {/* Voice + transcript */}
-            <Card className="no-print">
-                <CardHeader>
-                    <CardTitle className="flex items-center gap-2">
-                        <Icon name="mic" size={20} className="text-primary" />
-                        Dictate the order
-                    </CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-4">
-                    <VoiceButton supported={supported} listening={listening} onStart={start} onStop={stop} />
-                    <Textarea
-                        value={transcript}
-                        onChange={(e) => setTranscript(e.target.value)}
-                        placeholder={"e.g. 1 Paracetamol 500mg, 2 Crocin 500mg for Anurag 9876543210"}
-                        className="min-h-24"
-                    />
-                    <div className="flex gap-3">
-                        <Button onClick={handleGetPrices} disabled={!transcript.trim() || quoting}>
-                            <Icon name="search" size={18} />
-                            {quoting ? "Pricing…" : "Get Prices"}
-                        </Button>
-                        <Button variant="outline" onClick={handleNewBill}>
-                            <Icon name="refresh" size={18} />
-                            Clear
-                        </Button>
+            {catalogError && (
+                <div className="no-print flex items-center gap-3 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700 dark:bg-rose-950/20 dark:text-rose-300">
+                    <Icon name="error" size={18} />
+                    <span className="flex-1">{catalogError}</span>
+                    <Button variant="outline" size="sm" onClick={reload}>
+                        Try again
+                    </Button>
+                </div>
+            )}
+
+            {/* Add a line */}
+            <Card className="no-print p-4 gap-0">
+                <div className="flex flex-wrap items-end gap-4">
+                    <div className="min-w-[16rem] flex-1">
+                        <Label className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                            Medicine
+                        </Label>
+                        <MedicinePicker
+                            medicines={medicines}
+                            loading={catalogLoading}
+                            value={selected}
+                            onSelect={setSelected}
+                            disabled={adding || Boolean(confirmedSale)}
+                        />
                     </div>
-                </CardContent>
+
+                    <div>
+                        <Label
+                            htmlFor="qty"
+                            className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-muted-foreground"
+                        >
+                            Qty
+                        </Label>
+                        <Input
+                            id="qty"
+                            type="number"
+                            min={1}
+                            value={quantity}
+                            disabled={adding || Boolean(confirmedSale)}
+                            onChange={(e) =>
+                                setQuantity(Math.max(1, parseInt(e.target.value || "1", 10)))
+                            }
+                            onKeyDown={(e) => e.key === "Enter" && handleAdd()}
+                            className="h-9 w-24 text-center"
+                        />
+                    </div>
+
+                    <div>
+                        <Label
+                            htmlFor="unit"
+                            className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-muted-foreground"
+                        >
+                            Unit
+                        </Label>
+                        <select
+                            id="unit"
+                            value={unit}
+                            disabled={adding || Boolean(confirmedSale)}
+                            onChange={(e) => setUnit(e.target.value)}
+                            className="h-9 w-32 rounded-lg border border-input bg-background px-3 text-sm shadow-sm outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/40 disabled:opacity-60"
+                        >
+                            {UNIT_OPTIONS.map((u) => (
+                                <option key={u} value={u}>
+                                    {u}
+                                </option>
+                            ))}
+                        </select>
+                    </div>
+
+                    <Button
+                        onClick={handleAdd}
+                        disabled={!selected || adding || Boolean(confirmedSale)}
+                        className="h-9"
+                    >
+                        <Icon
+                            name={adding ? "progress_activity" : "add"}
+                            size={18}
+                            className={adding ? "animate-spin" : ""}
+                        />
+                        {adding ? "Pricing…" : "Add to bill"}
+                    </Button>
+                </div>
             </Card>
 
-            {/* Confirm uncertain voice matches before they hit the bill */}
             <div className="no-print">
-                <ConfirmSuggestions
-                    items={pending}
-                    onPick={handlePickCandidate}
-                    onAccept={handleAccept}
-                    onDismiss={handleDismiss}
-                />
+                <BillTable items={items} onQtyChange={handleQtyChange} onRemove={handleRemove} />
             </div>
 
-            {/* Warnings */}
-            <div className="no-print">
-                <NotFoundWarnings errors={errors} />
-            </div>
-
-            {/* Bill table */}
-            <div className="no-print">
-                <BillTable items={billed} onQtyChange={handleQtyChange} onRemove={handleRemove} />
-            </div>
-
-            {/* Customer (optional) + Print */}
-            {billed.length > 0 && (
+            {items.length > 0 && (
                 <Card className="no-print">
                     <CardContent className="space-y-4">
-                        <div className="grid sm:grid-cols-2 gap-4">
+                        <div className="grid gap-4 sm:grid-cols-2">
                             <div className="space-y-1.5">
                                 <Label htmlFor="cname">Customer name (optional)</Label>
-                                <Input id="cname" value={customerName} onChange={(e) => setCustomerName(e.target.value)} placeholder="Anurag" />
+                                <Input
+                                    id="cname"
+                                    value={customerName}
+                                    onChange={(e) => setCustomerName(e.target.value)}
+                                    placeholder="Anurag"
+                                />
                             </div>
                             <div className="space-y-1.5">
                                 <Label htmlFor="cphone">Phone (optional)</Label>
-                                <Input id="cphone" value={customerPhone} onChange={(e) => setCustomerPhone(e.target.value)} placeholder="9876543210" />
+                                <Input
+                                    id="cphone"
+                                    value={customerPhone}
+                                    onChange={(e) => setCustomerPhone(e.target.value)}
+                                    placeholder="9876543210"
+                                />
                             </div>
                         </div>
-                        <div className="flex gap-3">
-                            <Button size="lg" onClick={handlePrintBill} disabled={confirming}>
-                                <Icon name="print" size={20} />
-                                {confirming ? "Saving…" : "Print Bill"}
+
+                        <div className="flex flex-wrap gap-3">
+                            <Button
+                                size="lg"
+                                onClick={handleSaveBill}
+                                disabled={confirming || Boolean(confirmedSale)}
+                            >
+                                <Icon
+                                    name={
+                                        confirmedSale
+                                            ? "check_circle"
+                                            : confirming
+                                              ? "progress_activity"
+                                              : "save"
+                                    }
+                                    size={20}
+                                    className={confirming ? "animate-spin" : ""}
+                                />
+                                {confirmedSale
+                                    ? `Saved · #${confirmedSale.sale_id}`
+                                    : confirming
+                                      ? "Saving…"
+                                      : "Save Bill"}
                             </Button>
+
+                            {/* Disabled until saved: printing an unsaved bill hands the
+                                customer a receipt for an invoice that does not exist. */}
+                            <Button
+                                size="lg"
+                                variant={confirmedSale ? "default" : "outline"}
+                                onClick={handlePrint}
+                                disabled={!confirmedSale}
+                                title={confirmedSale ? undefined : "Save the bill first"}
+                            >
+                                <Icon name="print" size={20} />
+                                Print Receipt
+                            </Button>
+
                             {confirmedSale && (
                                 <Button size="lg" variant="outline" onClick={handleNewBill}>
                                     <Icon name="add" size={20} />
@@ -230,7 +338,6 @@ function NewBillPage() {
                 </Card>
             )}
 
-            {/* Print-only receipt (also re-printable) */}
             <Receipt sale={confirmedSale} />
         </div>
     );
