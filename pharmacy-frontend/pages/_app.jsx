@@ -19,8 +19,8 @@ export default function App({ Component, pageProps }) {
     return (
         <>
             <Head>
-                <title>PharmaBill — Voice Billing</title>
-                <meta name="description" content="Speak a medicine order; the bill fills itself." />
+                <title>PharmaBill — Pharmacy Operations</title>
+                <meta name="description" content="Billing, inventory and AI expiry risk for a pharmacy." />
                 <meta name="viewport" content="width=device-width, initial-scale=1" />
                 {/* Material Symbols font + ms-loaded gate live in pages/_document.jsx
                     (Next requires external stylesheets/scripts there, not in _app Head). */}

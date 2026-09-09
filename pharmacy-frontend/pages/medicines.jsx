@@ -25,7 +25,7 @@ function MedicinesPage() {
                     Medicines
                 </h1>
                 <p className="text-sm text-muted-foreground mt-1">
-                    The catalog the voice billing screen draws from.
+                    The catalog the billing screen draws from.
                 </p>
             </div>
 

@@ -13,7 +13,7 @@ export default function Receipt({ sale }) {
         <div id="print-receipt" className="bg-white text-black mx-auto max-w-md p-6">
             <div className="text-center border-b border-dashed border-gray-400 pb-3 mb-3">
                 <h2 className="text-xl font-bold">PharmaBill</h2>
-                <p className="text-xs text-gray-600">Voice Billing — Tax Invoice</p>
+                <p className="text-xs text-gray-600">Tax Invoice</p>
             </div>
 
             <div className="text-xs text-gray-700 mb-3 space-y-0.5">

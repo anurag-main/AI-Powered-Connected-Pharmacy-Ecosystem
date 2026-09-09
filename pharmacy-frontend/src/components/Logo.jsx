@@ -61,7 +61,7 @@ export default function Logo({
                         </span>
                     </span>
                     <span className="text-muted-foreground" style={{ fontSize: size * 0.26 }}>
-                        Voice Billing
+                        Pharmacy OS
                     </span>
                 </span>
             )}

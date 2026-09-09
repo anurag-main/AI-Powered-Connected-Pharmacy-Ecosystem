@@ -21,7 +21,7 @@ export default function BillTable({ items = [], onQtyChange, onRemove }) {
         return (
             <Card className="items-center justify-center py-16 text-muted-foreground">
                 <Icon name="receipt_long" size={40} className="text-muted-foreground/40" />
-                <p className="text-sm mt-2">No items yet. Speak or type an order, then press “Get Prices”.</p>
+                <p className="text-sm mt-2">No items yet. Search a medicine above and add it to the bill.</p>
             </Card>
         );
     }
