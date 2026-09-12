@@ -517,6 +517,11 @@ src/hooks/
 ├── useMedicineCatalog.js     # loads the catalogue once for the picker
 └── useExpiryRisk.js          # the expiry page's two-call sequence
 
+tests/                        # Vitest + React Testing Library
+├── setup.js                  # jest-dom, global fetch stub (throws by default)
+├── helpers.js                # response fixtures + fetch mock
+└── expiry-page.test.jsx      # 22 tests over the expiry page
+
 src/lib/
 ├── api/
 │   ├── client.js             # shared fetch: never throws, shapes every error

@@ -172,8 +172,10 @@ secrets, or exception messages from the database.
   evaluation    52 passed + 5 skipped
 ```
 
-**Frontend: no test runner installed yet.** Nothing in `pharmacy-frontend` is tested.
-Vitest + React Testing Library is the next frontend task.
+**Frontend:** Vitest + React Testing Library + jsdom in `pharmacy-frontend`
+(`npm test`). 22 tests over the expiry page; `fetch` is the mock boundary so the API
+client and its error mapping stay under test. Billing and sales pages are not covered
+yet. See [`testing.md`](testing.md).
 
 Two golden sets: BI (`golden_cases.json`, 30/30 graded) and Expiry
 (`expiry_risk_cases.json`, 14/14 graded). No test calls a real LLM provider.
@@ -210,7 +212,7 @@ Tables: `medicines`, `batches`, `customers`, `sales`, `sale_items`, `suppliers`,
 
 Drawn nowhere in this document because none of it exists:
 
-Supervisor / multi-agent routing · frontend tests · Forecast Agent · Inventory Risk Agent · Supplier
+Supervisor / multi-agent routing · Forecast Agent · Inventory Risk Agent · Supplier
 Risk Agent · Procurement Agent · human-approval workflow · audit log · authentication ·
 RBAC · RAG · Redis · MCP · Docker · CI/CD · deployment.
 

@@ -255,8 +255,62 @@ strings, so a formatter tweak does not fail a behavioural test.
 |---|---|
 | Migrations are untested | Schema is built from `Base.metadata`. Testing the Alembic chain properly needs a MySQL container — belongs with the Docker milestone |
 | SQLite is not MySQL | No coverage of MySQL-specific behaviour (`CHECK` enforcement, collation, `(CURRENT_DATE)` defaults). A small MySQL-backed suite belongs with Docker |
-| Billing and reorder graphs untested | Only `reorder_tools` maths is covered. Both agents work and are lower-priority per the roadmap |
+| Billing / reorder graphs and the billing + sales UI untested | Only `reorder_tools` maths is covered on the backend; on the frontend only the expiry page has tests. Both are lower-priority per the roadmap |
 | `strftime` in time breakdowns is SQLite-specific | Passes on SQLite; MySQL needs `date_format`. The one dialect-aware call, and the first thing to check when a MySQL-backed suite lands |
 | Native tool-calling graph untested | `FakeLLM.bind_tools` intentionally raises; add binding support when that graph is covered |
 | No coverage measurement | `pytest-cov` not added — a number nobody acts on is not worth a dependency yet |
 | `StarletteDeprecationWarning` from `TestClient` | Starlette wants `httpx2`; harmless, revisit on the next dependency bump |
+
+
+## Frontend tests
+
+The backend suite above is `pharmacy-core-backend`. The frontend has its own, smaller
+suite in `pharmacy-frontend`.
+
+```powershell
+cd pharmacy-frontend
+npm test            # vitest run
+npm run test:watch  # vitest
+```
+
+```text
+tests/
+├── setup.js                 jest-dom matchers; stubs global fetch to THROW by default
+├── helpers.js               response fixtures + the fetch mock
+└── expiry-page.test.jsx     22 tests over pages/expiry.jsx
+```
+
+**Stack:** Vitest 5 + React Testing Library 16 + jsdom. `vitest.config.mjs` sets the
+jsdom environment and mirrors the `@` alias from `jsconfig.json`, so imports resolve
+the same way `next build` resolves them.
+
+**Next.js is not involved.** Pages are imported and rendered as plain React
+components, which works because every page here keeps its shell in a `getLayout`
+static instead of wrapping itself. No router, no font loader, no `_app`.
+
+**The mock boundary is `fetch`, deliberately.** Mocking our own `getExpiryReport`
+would skip `lib/api/expiry.js` (`toQuery`) and `lib/api/client.js` (status-to-message
+mapping, `X-Request-ID`) — the two places a frontend bug actually hides. Mocking
+`fetch` keeps both under test and lets the parameter tests assert the real URL,
+method and body.
+
+`setup.js` installs a `fetch` stub that throws. A test that forgets to script a
+response fails loudly rather than reaching FastAPI, MySQL or OpenAI.
+
+### What is covered
+
+Only the expiry page today: loading, success, empty, error, request parameters, and
+that backend values are displayed unchanged. The billing and sales pages have no
+tests yet.
+
+These assert **display**, never business logic. Whether excess or value at risk is
+*correct* belongs to the backend's 196 expiry tests; the frontend tests prove the UI
+asks the right question and prints the answer it was given.
+
+### Known debt
+
+| Gap | Why |
+|---|---|
+| Billing and sales pages untested | Expiry was the milestone; these follow with their own feature work |
+| No component-level tests | Components are exercised through the page, which is where the behaviour is visible. Isolated tests would add count, not confidence |
+| No coverage measurement | Same reasoning as the backend — a number nobody acts on is not worth a dependency |

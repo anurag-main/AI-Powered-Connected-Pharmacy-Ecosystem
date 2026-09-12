@@ -1038,16 +1038,19 @@ half-computed risk report that looks complete is worse than an error.
 ## 20. Test Flow
 
 ```text
-Unit          tests/unit/test_expiry_risk_service.py         65
-              tests/unit/test_expiry_query.py                44
-              tests/unit/test_expiry_repository.py           21
-    v
-Integration   tests/integration/test_expiry_agent.py         22
-              tests/integration/test_expiry_dashboard_api.py 24
-    v
-Evaluation    tests/evaluation/test_expiry_golden_cases.py   20
-                                                             ---
-                                                             196
+Backend
+  Unit          tests/unit/test_expiry_risk_service.py         65
+                tests/unit/test_expiry_query.py                44
+                tests/unit/test_expiry_repository.py           21
+  Integration   tests/integration/test_expiry_agent.py         22
+                tests/integration/test_expiry_dashboard_api.py 24
+  Evaluation    tests/evaluation/test_expiry_golden_cases.py   20
+                                                               ---
+                                                               196
+Frontend
+  Vitest + RTL  tests/expiry-page.test.jsx                      22
+                                                               ---
+                                                        total  218
 ```
 
 `test_expiry_dashboard_api.py` covers the two endpoints the UI uses. Three of its
@@ -1060,11 +1063,38 @@ assertions are load-bearing for the frontend and would be easy to lose:
 * `test_counts_survive_a_limit` — ask for the top 1 and the table has one row, but the
   summary cards must still report all four at-risk batches.
 
-**Frontend tests: none yet.** `pharmacy-frontend` has no test runner installed (no
-Jest, no Vitest, no Testing Library), so there is nothing to add them to. The six
-checks the standard asks for — loading, success, empty, error, correct parameters
-sent, backend values displayed — are not covered. Standing up Vitest + React Testing
-Library is the next frontend task; this is a real gap, not a deliberate omission.
+### Frontend tests
+
+```text
+pharmacy-frontend/tests/expiry-page.test.jsx    22 tests
+    vitest.config.mjs      jsdom, @ alias mirroring jsconfig.json
+    tests/setup.js         jest-dom matchers, global fetch stub
+    tests/helpers.js       response fixtures + the fetch mock
+```
+
+Run with `npm test` (`vitest run`) in `pharmacy-frontend`.
+
+**Only `fetch` is mocked.** `useExpiryRisk`, `lib/api/expiry.js` and
+`lib/api/client.js` all execute for real, so a malformed request body or a
+mis-mapped error message fails a test. Mocking `getExpiryReport` directly would have
+skipped both and proved much less. `tests/setup.js` replaces `fetch` with a stub that
+*throws* by default, so a test cannot silently reach FastAPI, MySQL or OpenAI.
+
+The page is rendered as a plain React component — `pages/expiry.jsx` keeps its shell
+in a `getLayout` static, so no Next router or font loader is involved.
+
+| Behaviour | What is asserted |
+|---|---|
+| Loading | Skeletons while the request is open, gone once data lands; table renders *before* the AI summary |
+| Success | Medicine, batch, date, days, stock, excess, value and risk badge all render; cards read `counts_by_risk`, not row counts; backend ranking is not re-sorted |
+| Empty | The empty-state message appears, not a headerless table — and no `/explain` call is made |
+| Error | A 500 carrying a traceback, SQL and a password renders none of it; network failure and request id handled; Try again recovers; an AI-only failure leaves the table intact |
+| Parameters | Exact URL, POST, `Content-Type`, and body; `risk_level` omitted for "All levels"; both endpoints get an identical query; changing a filter does **not** fire a request |
+| Values unchanged | Distinctive figures (`TEST-MEDICINE-XYZ`, 17d, 83, ₹1,23,456.78, high) render verbatim; excess is not recomputed as stock − demand, because FEFO means it often isn't |
+
+What these do **not** test: whether excess, value at risk or the ranking are
+*correct*. That is backend domain logic with its own tests. These prove only that the
+UI asks the right question and displays the answer unchanged.
 
 **Fake LLM** — `tests/fakes.py::FakeLLM` implements the slice of `BaseChatModel` the
 nodes use. `with_structured_output(schema)` returns a scripted instance per schema, so
