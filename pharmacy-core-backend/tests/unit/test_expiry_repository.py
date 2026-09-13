@@ -1,7 +1,11 @@
 """ExpiryRepository — the SQL behind the risk calculation.
 
-The repository does no risk logic. What it must get right is the window, the ordering
-the service depends on, and the demand aggregate's boundaries.
+The repository does no risk logic. What it must get right is the window and the
+ordering the service depends on.
+
+The demand tests that used to live here moved to ``test_demand_service.py`` along with
+``recent_demand()`` itself — the reorder agent was asking the same question a different
+way, so there is now one implementation and one set of boundary tests.
 """
 
 from __future__ import annotations
@@ -182,86 +186,3 @@ def test_the_batch_carries_everything_the_calculation_needs(repository, expiry_a
     assert p1.quantity == 30
     assert p1.cost_price == Decimal("10.00")
     assert p1.expiry_date == expiry_as_of + timedelta(days=5)
-
-
-# ---------------------------------------------------------------------------
-# Demand
-# ---------------------------------------------------------------------------
-
-
-def test_demand_sums_units_sold_in_the_window(repository, expiry_as_of, expiry_db):
-    paracetamol = expiry_db.query(Medicine).filter_by(name="Paracetamol 500").one()
-
-    demand = repository.recent_demand(as_of=expiry_as_of, lookback_days=90)
-
-    assert demand[paracetamol.id] == 180
-
-
-def test_a_sale_outside_the_lookback_is_excluded(repository, expiry_as_of, expiry_db):
-    """Cough syrup sold 200 days ago, well outside a 90-day lookback."""
-
-    cough = expiry_db.query(Medicine).filter_by(name="Cough Syrup 100ml").one()
-
-    demand = repository.recent_demand(as_of=expiry_as_of, lookback_days=90)
-
-    assert cough.id not in demand
-
-
-def test_a_longer_lookback_reaches_the_older_sale(repository, expiry_as_of, expiry_db):
-    cough = expiry_db.query(Medicine).filter_by(name="Cough Syrup 100ml").one()
-
-    demand = repository.recent_demand(as_of=expiry_as_of, lookback_days=365)
-
-    assert demand[cough.id] == 50
-
-
-def test_a_medicine_never_sold_is_absent_rather_than_zero(
-    repository, expiry_as_of, expiry_db
-):
-    """Absent and zero mean different things to the service: one is "no data", the
-    other would be "known to sell nothing"."""
-
-    amox = expiry_db.query(Medicine).filter_by(name="Amoxicillin 250").one()
-
-    demand = repository.recent_demand(as_of=expiry_as_of, lookback_days=90)
-
-    assert amox.id not in demand
-
-
-def test_demand_can_be_restricted_to_specific_medicines(
-    repository, expiry_as_of, expiry_db
-):
-    paracetamol = expiry_db.query(Medicine).filter_by(name="Paracetamol 500").one()
-
-    demand = repository.recent_demand(
-        as_of=expiry_as_of, lookback_days=90, medicine_ids=[paracetamol.id]
-    )
-
-    assert set(demand) == {paracetamol.id}
-
-
-def test_demand_on_an_empty_database_is_empty(empty_repository, expiry_as_of):
-    assert empty_repository.recent_demand(as_of=expiry_as_of, lookback_days=90) == {}
-
-
-# ---------------------------------------------------------------------------
-# Ever-sold check
-# ---------------------------------------------------------------------------
-
-
-def test_ever_sold_separates_slow_movers_from_new_stock(
-    repository, expiry_as_of, expiry_db
-):
-    cough = expiry_db.query(Medicine).filter_by(name="Cough Syrup 100ml").one()
-    amox = expiry_db.query(Medicine).filter_by(name="Amoxicillin 250").one()
-
-    ever_sold = repository.medicines_with_any_sales([cough.id, amox.id])
-
-    assert cough.id in ever_sold, "sold 200 days ago, so it has history"
-    assert amox.id not in ever_sold, "never sold at all"
-
-
-def test_ever_sold_handles_an_empty_list(repository):
-    """An empty IN clause is a SQL error in some dialects; short-circuit instead."""
-
-    assert repository.medicines_with_any_sales([]) == set()

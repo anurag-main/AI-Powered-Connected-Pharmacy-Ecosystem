@@ -1,35 +1,36 @@
 """Database access for expiry-risk analysis. SQL only — no risk logic lives here.
 
-Two questions, deliberately separate:
+This repository answers exactly one question: **which batches exist, with how much
+stock, expiring when.**
 
-    batches_in_window()   which batches exist, with how much stock, expiring when
-    recent_demand()       how many units of each medicine sold recently
+The other half of the calculation — how fast each medicine sells — used to live here
+too, in ``recent_demand()``. It moved to
+:class:`app.services.demand_service.DemandService`, because the reorder agent was
+asking the same question through a different query with a different window, and the
+two could disagree about one medicine on one day. There is now one definition.
 
-They are separate because they aggregate at different grains. Stock is **per batch**;
-demand is **per medicine** — a customer asks for "Crocin", and FEFO decides which
-batch it comes out of. Joining them in one query would force a choice between
-duplicating demand across a medicine's batches or dividing it arbitrarily, and both
-are wrong. The service allocates demand across batches in FEFO order instead, which
-is what actually happens at the counter.
+Stock and demand were always separate queries, and that stays true for a reason worth
+restating: they aggregate at different grains. Stock is **per batch**; demand is **per
+medicine** — a customer asks for "Crocin", and FEFO decides which batch it comes out
+of. Joining them would force a choice between duplicating demand across a medicine's
+batches or dividing it arbitrarily, and both are wrong. The service allocates demand
+across batches in FEFO order instead, which is what actually happens at the counter.
 
-The `ix_batches_medicine_expiry` index already covers the batch scan, and
-`ix_sale_items_medicine_id` plus `ix_sales_sold_at` cover the demand aggregate, so no
-new index is added.
+The ``ix_batches_medicine_expiry`` index already covers the batch scan, so no new
+index is added.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime, time, timedelta
+from datetime import date, timedelta
 from decimal import Decimal
 
-from sqlalchemy import Select, func
+from sqlalchemy import Select
 from sqlalchemy.orm import Session
 
 from app.models.batch import Batch
 from app.models.medicine import Medicine
-from app.models.sale import Sale
-from app.models.sale_item import SaleItem
 
 
 @dataclass(frozen=True)
@@ -46,7 +47,7 @@ class BatchStock:
 
 
 class ExpiryRepository:
-    """Reads the stock and sales facts the expiry-risk calculation needs."""
+    """Reads the batch-level stock facts the expiry-risk calculation needs."""
 
     def __init__(self, db: Session) -> None:
         self.db = db
@@ -112,62 +113,3 @@ class ExpiryRepository:
             )
             for row in self.db.execute(statement)
         ]
-
-    # ------------------------------------------------------------------
-    # Demand
-    # ------------------------------------------------------------------
-
-    def recent_demand(
-        self,
-        *,
-        as_of: date,
-        lookback_days: int,
-        medicine_ids: list[int] | None = None,
-    ) -> dict[int, int]:
-        """Units sold per medicine over the lookback window.
-
-        Returns ``{medicine_id: units}``. A medicine absent from the result sold
-        nothing — the service distinguishes that from "no sales history at all", since
-        the two mean different things to a pharmacist.
-
-        The window is ``[as_of - lookback_days, as_of)``: it ends at midnight today so
-        a partial day cannot drag the daily average down.
-        """
-
-        start = datetime.combine(as_of - timedelta(days=lookback_days), time.min)
-        end = datetime.combine(as_of, time.min)
-
-        statement: Select = (
-            Select(
-                SaleItem.medicine_id,
-                func.coalesce(func.sum(SaleItem.quantity), 0),
-            )
-            .join(Sale, Sale.id == SaleItem.sale_id)
-            .where(Sale.sold_at >= start)
-            .where(Sale.sold_at < end)
-            .group_by(SaleItem.medicine_id)
-        )
-
-        if medicine_ids:
-            statement = statement.where(SaleItem.medicine_id.in_(medicine_ids))
-
-        return {row[0]: int(row[1] or 0) for row in self.db.execute(statement)}
-
-    def medicines_with_any_sales(self, medicine_ids: list[int]) -> set[int]:
-        """Which of these medicines have EVER been sold.
-
-        Distinguishes "sold nothing lately" from "never sold at all". The first is a
-        slow mover; the second is a new product with no history to estimate from, and
-        the report must say so rather than quietly treating zero demand as a fact.
-        """
-
-        if not medicine_ids:
-            return set()
-
-        statement = (
-            Select(SaleItem.medicine_id)
-            .where(SaleItem.medicine_id.in_(medicine_ids))
-            .group_by(SaleItem.medicine_id)
-        )
-
-        return {row[0] for row in self.db.execute(statement)}

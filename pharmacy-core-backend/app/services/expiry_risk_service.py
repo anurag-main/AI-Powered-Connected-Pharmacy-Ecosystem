@@ -67,6 +67,7 @@ from app.ai.schemas.expiry_query import (
 )
 from app.core.time_range import today
 from app.repositories.expiry_repository import BatchStock, ExpiryRepository
+from app.services.demand_service import DemandService, DemandWindow, daily_velocity
 
 logger = logging.getLogger("app.services.expiry")
 
@@ -150,6 +151,20 @@ class ExpiryRiskService:
     ) -> None:
         self.repository = repository
         self.config = config or ExpiryRiskConfig.from_env()
+        self._demand: DemandService | None = None
+
+    @property
+    def demand(self) -> DemandService:
+        """Sales history, through the definition every stock agent shares.
+
+        Built lazily from the repository's own session rather than injected, so the
+        fifteen existing call sites keep working and a report that finds no batches
+        never opens a query it does not need.
+        """
+
+        if self._demand is None:
+            self._demand = DemandService(self.repository.db)
+        return self._demand
 
     # -- entry point ----------------------------------------------------
 
@@ -182,12 +197,11 @@ class ExpiryRiskService:
 
         medicine_ids = sorted({batch.medicine_id for batch in batches})
 
-        demand_units = self.repository.recent_demand(
-            as_of=reference,
-            lookback_days=self.config.demand_lookback_days,
-            medicine_ids=medicine_ids,
+        window = DemandWindow.trailing(
+            as_of=reference, lookback_days=self.config.demand_lookback_days
         )
-        ever_sold = self.repository.medicines_with_any_sales(medicine_ids)
+        demand_units = self.demand.units_sold(window, medicine_ids=medicine_ids)
+        ever_sold = self.demand.medicines_ever_sold(medicine_ids)
 
         items = self._assess_batches(batches, demand_units, reference)
         notes = self._build_notes(batches, demand_units, ever_sold)
@@ -274,9 +288,13 @@ class ExpiryRiskService:
         return items
 
     def _daily_demand(self, units_in_lookback: int) -> float:
-        """Average units sold per day over the lookback window."""
+        """Average units sold per day over the lookback window.
 
-        return max(0.0, units_in_lookback / self.config.demand_lookback_days)
+        Thin by design: the formula itself is shared with the reorder agent, so the
+        two cannot drift apart. See ``app/services/demand_service.py``.
+        """
+
+        return daily_velocity(units_in_lookback, self.config.demand_lookback_days)
 
     # -- one batch ------------------------------------------------------
 
