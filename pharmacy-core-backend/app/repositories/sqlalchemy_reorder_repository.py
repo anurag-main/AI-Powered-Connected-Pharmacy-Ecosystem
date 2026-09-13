@@ -1,28 +1,57 @@
-"""SQL-backed repository for the Smart Reorder Agent's raw numbers.
+"""Stock-on-hand for the Smart Reorder Agent, stitched to shared demand.
 
 The reorder agent needs two facts per medicine:
-  1. how much sellable stock is on hand  (current_stock)
-  2. how fast it has been selling lately   (for daily_velocity)
+  1. how much sellable stock is on hand  (this repository)
+  2. how fast it has been selling lately (DemandService — shared with expiry)
 
-Both are computed here as SINGLE aggregate queries (GROUP BY), NOT one query
-per medicine. This is the difference between a toy and production:
+Both are computed as SINGLE aggregate queries (GROUP BY), NOT one query per
+medicine. This is the difference between a toy and production:
 
-    ❌ N+1:  for each of 10,000 medicines -> run a SUM query  = 10,000 queries
-    ✅ this: ONE GROUP BY over the whole table               = 1 query
+    N+1:  for each of 10,000 medicines -> run a SUM query  = 10,000 queries
+    this: ONE GROUP BY over the whole table               = 1 query
 
-Like select_fefo(), the expiry filter uses func.current_date() (MySQL-side)
-instead of Python's date.today(), so the comparison runs in the DB's timezone
-and can't skew if the app server and DB live in different zones.
+Total DB cost stays 3 queries — stock, demand, medicine list — regardless of how
+many medicines exist.
+
+WHAT CHANGED, AND WHY IT MATTERS
+--------------------------------
+``units_sold_since(cutoff)`` used to live here and computed its own window::
+
+    cutoff = datetime.now() - timedelta(days=30)
+    WHERE sales.sold_at >= cutoff          # no upper bound at all
+
+Three problems, all real:
+
+* ``datetime.now()`` read the **system** clock, while the expiry agent read
+  ``APP_TIMEZONE``. Two agents, two definitions of "now".
+* The cutoff was a mid-afternoon timestamp, so running the report twice in one day
+  measured two different windows.
+* No upper bound meant a back-dated correction or a future-dated sale counted
+  toward "the last 30 days".
+
+It now calls :class:`app.services.demand_service.DemandService`, which uses
+``[midnight(today - 30), midnight(today))`` in the pharmacy's timezone. Velocity may
+therefore move slightly against the old numbers — that is the bug being fixed, not a
+regression.
+
+Like select_fefo(), the expiry filter below uses ``func.current_date()`` (evaluated
+MySQL-side) rather than Python's ``date.today()``, so the comparison runs in the
+database's own timezone.
+
+KNOWN DEBT
+----------
+``get_reorder_candidates`` is not really repository work — it loops, defaults and
+stitches, which is service logic that has always lived here. Left in place because
+moving it would change the reorder node's contract for no gain in this step.
 """
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models.batch import Batch
 from app.models.medicine import Medicine
-from app.models.sale import Sale
-from app.models.sale_item import SaleItem
+from app.services.demand_service import DemandService, DemandWindow
 
 # Rolling sales window that defines "how fast it leaves right now".
 # NOT all-time — a medicine hot last year must not look urgent today.
@@ -55,24 +84,6 @@ class SQLAlchemyReorderRepository:
         )
         return {med_id: int(total or 0) for med_id, total in self._db.execute(stmt).all()}
 
-    def units_sold_since(self, cutoff: datetime) -> dict[int, int]:
-        """Units sold per medicine since `cutoff`: SUM(SaleItem.quantity).
-
-        Joins sale_items -> sales to filter by when the sale happened
-        (Sale.sold_at >= cutoff). Returns {medicine_id: units_sold}.
-        A medicine with no sales in the window won't be a key (caller -> 0).
-
-        Pass a rolling cutoff (e.g. now - 30 days) so demand is RECENT, not
-        all-time — a medicine that was hot last year shouldn't look urgent now.
-        """
-        stmt = (
-            select(SaleItem.medicine_id, func.sum(SaleItem.quantity))
-            .join(Sale, Sale.id == SaleItem.sale_id)
-            .where(Sale.sold_at >= cutoff)
-            .group_by(SaleItem.medicine_id)
-        )
-        return {med_id: int(total or 0) for med_id, total in self._db.execute(stmt).all()}
-
     def get_reorder_candidates(
         self,
         window_days: int = VELOCITY_WINDOW_DAYS,
@@ -80,30 +91,34 @@ class SQLAlchemyReorderRepository:
     ) -> list[dict]:
         """Raw numbers per medicine for the reorder agent to reason over.
 
-        Stitches the two aggregate queries above together with the full medicine
-        list. Every medicine appears exactly once; the .get(..., 0) defaults turn
-        "no batches" into stock 0 and "no recent sales" into velocity 0.0.
+        Stitches stock with shared demand across the full medicine list. Every
+        medicine appears exactly once; the ``.get(..., 0)`` defaults turn "no
+        batches" into stock 0 and "no recent sales" into velocity 0.0 — which is
+        what sends a never-sold medicine to the LLM judgment node rather than into
+        a divide-by-zero.
 
         Returns one dict per medicine:
             {"medicine_id": int, "name": str,
-             "current_stock": int, "daily_velocity": float}
-
-        Total DB cost = 3 queries (stock + sold + medicine list), regardless of
-        how many medicines exist — NOT one query per medicine.
+             "current_stock": int, "daily_velocity": float,
+             "days_since_added": int}
         """
-        cutoff = datetime.now() - timedelta(days=window_days)
+        window = DemandWindow.trailing(lookback_days=window_days)
         stock = self.stock_on_hand_by_medicine()
-        sold = self.units_sold_since(cutoff)
+        velocity = DemandService(self._db).daily_velocity(window)
+
+        # Age of the product record, NOT a demand figure — it keeps its own
+        # wall-clock reading. Measuring it from the window's midnight boundary
+        # would make a medicine added this morning come out at -1 days old.
+        now = datetime.now()
 
         candidates: list[dict] = []
         for medicine in self._db.scalars(select(Medicine)).all():
-            units_sold = sold.get(medicine.id, 0)
             candidates.append({
                 "medicine_id": medicine.id,
                 "name": medicine.name,
                 "current_stock": stock.get(medicine.id, 0),
-                "daily_velocity": units_sold / window_days,
-                "days_since_added": (datetime.now() - medicine.created_at).days,
+                "daily_velocity": velocity.get(medicine.id, 0.0),
+                "days_since_added": (now - medicine.created_at).days,
             })
         if exclude_ids:
             candidates = [c for c in candidates if c["medicine_id"] not in exclude_ids]
