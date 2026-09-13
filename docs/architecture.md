@@ -5,7 +5,7 @@
 > [`AI_Pharma_15LPA_Roadmap.md`](../AI_Pharma_15LPA_Roadmap.md) and
 > [`05_architecture_audit.md`](05_architecture_audit.md).
 >
-> Last verified against the source: **2026-09-09**.
+> Last verified against the source: **2026-09-13**.
 > Backend paths are relative to `pharmacy-core-backend/`, frontend paths to
 > `pharmacy-frontend/`.
 
@@ -43,6 +43,7 @@ flowchart TB
     end
 
     SVC["Services — app/services/"]
+    DEM["DemandService<br/>shared sales velocity"]
     REPO["Repositories — app/repositories/"]
     DB[("MySQL 8")]
     CHROMA[("ChromaDB<br/>long-term memory")]
@@ -73,6 +74,9 @@ flowchart TB
     G3 --> SVC
     G4 --> SVC
     G5 --> SVC
+    SVC --> DEM
+    G2 --> DEM
+    DEM --> REPO
     SVC --> REPO
     REPO --> DB
     G3 --> CHROMA
@@ -105,6 +109,7 @@ API client    src/lib/api/          The only place fetch() is called.
                                     ---- HTTP ----
 Router        app/routers/          HTTP only. Validates, delegates, returns.
 Service       app/services/         Business logic. Owns transactions and orchestration.
+                                    demand_service.py is shared by every stock agent.
 Repository    app/repositories/     SQL only. No business rules.
 Model         app/models/           SQLAlchemy ORM.
 
@@ -163,13 +168,27 @@ optional and its real status is reported at boot.
 Never logged: names, quantities, money, prompts, tool arguments, tool results,
 secrets, or exception messages from the database.
 
+### Shared domain services — [`features/demand_service.md`](features/demand_service.md)
+
+`DemandService` is the single definition of how fast a medicine sells: units sold,
+daily velocity, last sale date, ever-sold. Deterministic — SQL and Python, no model.
+
+The Expiry Risk and Reorder agents previously each computed demand with their own
+query. The formula agreed; the window did not — different clocks, no midnight
+alignment on one side, and no upper bound at all on the other, so a future-dated sale
+counted as "recent". Both now call the same service. Window semantics are half-open,
+`[midnight(as_of − N), midnight(as_of))`, resolved in `APP_TIMEZONE`.
+
+Reorder's numbers moved slightly as a result. That change is the fix, and it is
+documented in full in the feature doc.
+
 ### Testing — [`testing.md`](testing.md)
 
 ```text
-597 passed, 5 skipped
-  unit         431
+572 passed (unit + integration)
+  unit         458
   integration  114
-  evaluation    52 passed + 5 skipped
+  evaluation    52 passed + 5 skipped — not re-run since the DemandService extraction
 ```
 
 **Frontend:** Vitest + React Testing Library + jsdom in `pharmacy-frontend`
@@ -215,6 +234,10 @@ Drawn nowhere in this document because none of it exists:
 Supervisor / multi-agent routing · Forecast Agent · Inventory Risk Agent · Supplier
 Risk Agent · Procurement Agent · human-approval workflow · audit log · authentication ·
 RBAC · RAG · Redis · MCP · Docker · CI/CD · deployment.
+
+The Inventory Risk Agent is designed but **not built**. Only its first groundwork
+step — the `DemandService` extraction above — exists, and that is shared
+infrastructure rather than any part of the agent.
 
 Add a component to the diagram in §1 **only** when its code exists and its document
 does too.
