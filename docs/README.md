@@ -12,7 +12,8 @@ docs/
 │   └── expiry_risk_agent.md      Expiry Risk Agent
 │
 ├── features/
-│   └── demand_service.md         shared sales-velocity infrastructure
+│   ├── demand_service.md         shared sales-velocity infrastructure
+│   └── inventory_risk.md         capital-at-risk domain + service (no agent yet)
 │
 ├── business_queries.md           BI agent structured queries, date semantics, memory
 ├── observability.md              request_id / run_id / thread_id, events, LangSmith
@@ -49,13 +50,14 @@ docs/
 | Reorder | Partial — [`03_reorder_agent.md`](03_reorder_agent.md) | not yet at the standard |
 | Billing | Partial — [`02_billing_agent.md`](02_billing_agent.md) | frozen; not being extended |
 | Tool Agent (experimental) | **Undocumented and untested** | — |
-| Inventory Risk | Designed only. Groundwork done: [`features/demand_service.md`](features/demand_service.md) | no code yet |
+| Inventory Risk | Domain + service built, **no agent/API/UI yet** | [`features/inventory_risk.md`](features/inventory_risk.md) |
 
 ## Features
 
 | Feature | Status | Document |
 |---|---|---|
 | Demand / sales velocity | Documented | [`features/demand_service.md`](features/demand_service.md) |
+| Inventory risk (capital) | Documented — service layer only | [`features/inventory_risk.md`](features/inventory_risk.md) |
 | Observability | Documented | [`observability.md`](observability.md) |
 | Testing + evaluation | Documented | [`testing.md`](testing.md) |
 | Memory (ChromaDB) | Partial, inside [`business_queries.md`](business_queries.md) | `features/memory.md` not yet written |

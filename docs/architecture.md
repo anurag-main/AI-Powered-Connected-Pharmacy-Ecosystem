@@ -185,8 +185,8 @@ documented in full in the feature doc.
 ### Testing — [`testing.md`](testing.md)
 
 ```text
-572 passed (unit + integration)
-  unit         458
+647 passed (unit + integration)
+  unit         533
   integration  114
   evaluation    52 passed + 5 skipped — not re-run since the DemandService extraction
 ```
@@ -235,9 +235,11 @@ Supervisor / multi-agent routing · Forecast Agent · Inventory Risk Agent · Su
 Risk Agent · Procurement Agent · human-approval workflow · audit log · authentication ·
 RBAC · RAG · Redis · MCP · Docker · CI/CD · deployment.
 
-The Inventory Risk Agent is designed but **not built**. Only its first groundwork
-step — the `DemandService` extraction above — exists, and that is shared
-infrastructure rather than any part of the agent.
+The Inventory Risk **Agent** is not built: no graph, no node, no endpoint, no UI.
+What exists is its deterministic groundwork — the shared `DemandService`, and
+`InventoryRiskService` + `InventoryRepository`, documented in
+[`features/inventory_risk.md`](features/inventory_risk.md). Neither is drawn in §1,
+because §1 shows what a request can reach, and nothing routes to these yet.
 
 Add a component to the diagram in §1 **only** when its code exists and its document
 does too.
