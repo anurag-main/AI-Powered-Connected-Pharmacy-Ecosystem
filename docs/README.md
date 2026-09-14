@@ -13,7 +13,7 @@ docs/
 │
 ├── features/
 │   ├── demand_service.md         shared sales-velocity infrastructure
-│   └── inventory_risk.md         capital-at-risk domain + service (no agent yet)
+│   └── inventory_risk.md         capital-at-risk domain + service
 │
 ├── business_queries.md           BI agent structured queries, date semantics, memory
 ├── observability.md              request_id / run_id / thread_id, events, LangSmith
@@ -50,14 +50,14 @@ docs/
 | Reorder | Partial — [`03_reorder_agent.md`](03_reorder_agent.md) | not yet at the standard |
 | Billing | Partial — [`02_billing_agent.md`](02_billing_agent.md) | frozen; not being extended |
 | Tool Agent (experimental) | **Undocumented and untested** | — |
-| Inventory Risk | Domain + service built, **no agent/API/UI yet** | [`features/inventory_risk.md`](features/inventory_risk.md) |
+| **Inventory Risk** | Documented to the standard. Backend complete; **no frontend yet** | [`agents/inventory_risk_agent.md`](agents/inventory_risk_agent.md), [`features/inventory_risk.md`](features/inventory_risk.md) |
 
 ## Features
 
 | Feature | Status | Document |
 |---|---|---|
 | Demand / sales velocity | Documented | [`features/demand_service.md`](features/demand_service.md) |
-| Inventory risk (capital) | Documented — service layer only | [`features/inventory_risk.md`](features/inventory_risk.md) |
+| Inventory risk (capital) | Documented — the deterministic layer | [`features/inventory_risk.md`](features/inventory_risk.md) |
 | Observability | Documented | [`observability.md`](observability.md) |
 | Testing + evaluation | Documented | [`testing.md`](testing.md) |
 | Memory (ChromaDB) | Partial, inside [`business_queries.md`](business_queries.md) | `features/memory.md` not yet written |

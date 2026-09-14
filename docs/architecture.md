@@ -30,6 +30,7 @@ flowchart TB
         R3["/api/v1/reorder"]
         R4["/api/v1/business"]
         R5["/api/v1/expiry<br/>analyze · report · explain"]
+        R8["/api/v1/inventory<br/>analyze · report · explain"]
         R6["/tool-agent"]
         R7["/api/v1/sales"]
     end
@@ -39,6 +40,7 @@ flowchart TB
         G2["reorder_graph"]
         G3["business_graph<br/>(BI agent)"]
         G4["expiry_graph<br/>(Expiry Risk agent)"]
+        G6["inventory_graph<br/>(Inventory Risk agent)"]
         G5["business_tool_graph<br/>(native tool-calling, untested)"]
     end
 
@@ -60,6 +62,7 @@ flowchart TB
     MW --> R5
     MW --> R6
     MW --> R7
+    MW --> R8
 
     R1 --> SVC
     R2 --> G1
@@ -68,14 +71,17 @@ flowchart TB
     R5 --> G4
     R6 --> G5
     R7 --> SVC
+    R8 --> G6
 
     G1 --> SVC
     G2 --> SVC
     G3 --> SVC
     G4 --> SVC
     G5 --> SVC
+    G6 --> SVC
     SVC --> DEM
     G2 --> DEM
+    G6 --> DEM
     DEM --> REPO
     SVC --> REPO
     REPO --> DB
@@ -86,6 +92,7 @@ flowchart TB
     G3 -.-> LLM
     G4 -.-> LLM
     G5 -.-> LLM
+    G6 -.-> LLM
 
     classDef gap fill:#eeeeee,stroke:#999,stroke-dasharray:4 3,color:#000
     class G5 gap
@@ -143,6 +150,7 @@ Those are Python. The model chooses *what to ask for* and *how to say the answer
 | Reorder | `reorder_graph.py` | `GET`/`POST /api/v1/reorder` | deterministic reorder suggestions | [`03_reorder_agent.md`](03_reorder_agent.md) |
 | Business Intelligence | `business_graph.py` | `POST /api/v1/business/analyze` | planner → fetcher → analyzer → reflection loop; ChromaDB memory | [`business_queries.md`](business_queries.md), [`04_bi_agent_qa_report.md`](04_bi_agent_qa_report.md) |
 | **Expiry Risk** | `expiry_graph.py` | `POST /api/v1/expiry/{analyze,report,explain}` | planner → fetcher → analyzer, no loop; planner skipped when a query is supplied. **Has a UI** at `/expiry` | [`agents/expiry_risk_agent.md`](agents/expiry_risk_agent.md) |
+| **Inventory Risk** | `inventory_graph.py` | `POST /api/v1/inventory/{analyze,report,explain}` | planner → fetcher → analyzer, no loop; planner skipped when a query is supplied. **No UI yet** | [`agents/inventory_risk_agent.md`](agents/inventory_risk_agent.md) |
 | Tool Agent (experimental) | `business_tool_graph.py` | `POST /tool-agent/...` | native LangGraph tool calling | none — **untested**, `FakeLLM` does not script tool binding |
 
 Billing is **not** being developed further as an AI agent. It stays as built; the
@@ -231,15 +239,12 @@ Tables: `medicines`, `batches`, `customers`, `sales`, `sale_items`, `suppliers`,
 
 Drawn nowhere in this document because none of it exists:
 
-Supervisor / multi-agent routing · Forecast Agent · Inventory Risk Agent · Supplier
-Risk Agent · Procurement Agent · human-approval workflow · audit log · authentication ·
+Supervisor / multi-agent routing · Forecast Agent · Supplier Risk Agent ·
+Procurement Agent · human-approval workflow · audit log · authentication ·
 RBAC · RAG · Redis · MCP · Docker · CI/CD · deployment.
 
-The Inventory Risk **Agent** is not built: no graph, no node, no endpoint, no UI.
-What exists is its deterministic groundwork — the shared `DemandService`, and
-`InventoryRiskService` + `InventoryRepository`, documented in
-[`features/inventory_risk.md`](features/inventory_risk.md). Neither is drawn in §1,
-because §1 shows what a request can reach, and nothing routes to these yet.
+The Inventory Risk Agent's **frontend** does not exist yet. Its backend is complete
+and is drawn in §1; `pages/inventory.jsx` is the next step.
 
 Add a component to the diagram in §1 **only** when its code exists and its document
 does too.

@@ -16,7 +16,7 @@ pip install -r requirements-dev.txt
 pytest                          # everything
 pytest tests/unit               # fast, no I/O beyond SQLite
 pytest tests/integration        # graph + HTTP boundaries
-pytest tests/evaluation         # BI + expiry golden sets
+pytest tests/evaluation         # BI + expiry + inventory golden sets
 pytest -m known_gap             # only the tests that pin known defects
 pytest -k margin                # by name
 ```
@@ -121,7 +121,7 @@ Fixtures: `db_session` (raw session) · `seeded_db` (scenario loaded) · `seeded
 
 ## The golden sets
 
-Two, with different powers.
+Three, with different powers.
 
 **BI** (`golden_cases.json`, 33 cases) grades the *pipeline*, because the BI agent's
 answers depend on what the model decides to fetch.
@@ -130,6 +130,28 @@ answers depend on what the model decides to fetch.
 counts, rupees at risk, which batch ranks first. That is only possible because the expiry
 calculation is deterministic: given the same stock and sales, the report is byte-identical
 however the model phrases it. It is a correctness suite, not just a plumbing check.
+
+**Inventory** (`inventory_risk_cases.json`, 17 cases) grades computed values the same
+way — capital at risk in rupees, days of cover, which medicine ranks first. It adds two
+assertions of its own, applied to every case:
+
+* `total_capital_at_risk` may never exceed `total_inventory_value`, which would mean
+  the dead-stock branch is double-counting the headline figure
+* `no_expiry_dates` — no reason may mention an expiry date, which is the boundary that
+  keeps the inventory screen from becoming the expiry screen
+
+### What a fake-LLM golden set cannot catch
+
+Worth stating plainly, because the inventory round trip proved it. In fake-LLM mode the
+model returns whatever the case scripted, so **no golden case can detect a bad prompt.**
+Two real prompt defects shipped through a fully green suite and were only found by
+calling the real provider: the analyst inventing a subtotal by adding rows up, and a
+verbatim example sentence in the prompt collapsing the whole answer to that sentence.
+
+Both are now guarded deterministically — the subtotal is computed in the service
+(`capital_at_risk_in_view`) rather than asked for — but the lesson stands: run the real
+round trip before calling an agent done. See
+[`agents/inventory_risk_agent.md`](agents/inventory_risk_agent.md) §11.
 
 ### The BI set
 
@@ -224,10 +246,17 @@ tests/
 │                                       maths, correlation context, tracing config
 ├── integration/             72 tests — BI graph, expiry graph, HTTP endpoints,
 │                                       observability chain
-└── evaluation/              57 tests — BI + expiry golden sets, harness self-checks
+└── evaluation/              79 tests — BI + expiry + inventory golden sets,
+    │                                     harness self-checks
     ├── golden_cases.json
+    ├── expiry_risk_cases.json
+    ├── inventory_risk_cases.json
     ├── runner.py            also runnable as `python -m tests.evaluation.runner`
-    └── test_bi_golden_cases.py
+    ├── expiry_runner.py      `python -m tests.evaluation.expiry_runner`
+    ├── inventory_runner.py   `python -m tests.evaluation.inventory_runner`
+    ├── test_bi_golden_cases.py
+    ├── test_expiry_golden_cases.py
+    └── test_inventory_golden_cases.py
 ```
 
 Most tests are unit tests. Integration tests cover boundaries that unit tests cannot: the
