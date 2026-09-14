@@ -50,6 +50,7 @@ from sqlalchemy.orm import Session
 from app.models.batch import Batch
 from app.models.medicine import Medicine
 from app.models.purchase import Purchase
+from app.models.purchase_item import PurchaseItem
 from app.models.returns import Return
 from app.models.sale import Sale
 from app.models.sale_item import SaleItem
@@ -369,4 +370,183 @@ def seed_expiry_scenario(db: Session, as_of: date) -> dict[str, object]:
         "cough_syrup": cough_syrup,
         "far_future": far_future,
         "batches": batches,
+    }
+
+
+# ===========================================================================
+# Inventory-risk scenario
+# ===========================================================================
+#
+# Separate from the other two on purpose. The expiry scenario is built around
+# expiry dates and has no purchase history at all, so it cannot exercise stock age
+# or capital at risk; bending it to serve both would break the expiry assertions for
+# no gain.
+#
+# Everything is relative to an `as_of` the caller passes in, so no test depends on
+# the day it runs.
+#
+# THE SCENARIO (as_of = D)
+# ------------------------
+# PARACETAMOL   100 units @ 20  sold 900 over 90d  received D-45
+#   10/day, 10 days of cover, target 600 -> no excess          -> HEALTHY
+#
+# AMOXICILLIN   500 units @ 50  NEVER SOLD         received D-300
+#   no velocity, no cover figure, Rs 25,000 all stuck          -> DEAD
+#
+# CETIRIZINE    400 units @ 100 sold 90 over 90d   received D-120
+#   1/day, 400 days of cover, 340 excess = Rs 34,000           -> CRITICAL
+#
+# COUGH SYRUP    60 units @ 40  sold 50, 200d ago  received D-210
+#   has history but none recent -> Rs 2,400 stuck              -> DEAD
+#
+# VITAMIN C     150 units @ 15  sold 90 over 90d   received D-60
+#   1/day, 150 days of cover, 90 excess = Rs 1,350             -> MEDIUM
+#
+# IBUPROFEN   60 live + 40 expired @ 10  sold 90 over 90d  received D-30
+#   60 sellable at 1/day = 60 days cover, target 60 -> no excess -> HEALTHY
+#   The expired 40 count as capital but not as cover. No purchase line for the
+#   expired batch, deliberately.
+#
+# DOMPERIDONE     0 units @ 15  never sold
+#   No capital tied up -> excluded from items, counted separately
+# ===========================================================================
+
+INVENTORY_EXPECTED = {
+    "Paracetamol 500": {"risk": "healthy", "capital_at_risk": 0.00},
+    "Amoxicillin 250": {"risk": "dead", "capital_at_risk": 25_000.00},
+    "Cetirizine 10": {"risk": "critical", "capital_at_risk": 34_000.00},
+    "Cough Syrup 100ml": {"risk": "dead", "capital_at_risk": 2_400.00},
+    "Vitamin C 500": {"risk": "medium", "capital_at_risk": 1_350.00},
+    "Ibuprofen 400": {"risk": "healthy", "capital_at_risk": 0.00},
+}
+
+INVENTORY_TOTAL_VALUE = 72_650.00
+INVENTORY_TOTAL_AT_RISK = 62_750.00
+
+
+def seed_inventory_scenario(db: Session, as_of: date) -> dict[str, object]:
+    """Insert the inventory scenario above, relative to ``as_of``."""
+
+    from datetime import timedelta
+
+    supplier = Supplier(name="Acme Distributors", phone="9000000000")
+    db.add(supplier)
+    db.flush()
+
+    def medicine(name: str, mrp: str) -> Medicine:
+        row = Medicine(
+            name=name,
+            normalized_name=name.lower(),
+            mrp=Decimal(mrp),
+            hsn_code="30049099",
+            manufacturer="Generic Pharma",
+        )
+        db.add(row)
+        db.flush()
+        return row
+
+    def batch(
+        med: Medicine,
+        number: str,
+        *,
+        units: int,
+        cost: str,
+        expires_in: int = 365,
+        received: int | None = None,
+    ) -> Batch:
+        row = Batch(
+            medicine_id=med.id,
+            batch_number=number,
+            expiry_date=as_of + timedelta(days=expires_in),
+            quantity=units,
+            cost_price=Decimal(cost),
+        )
+        db.add(row)
+        db.flush()
+
+        if received is not None:
+            purchase = Purchase(
+                supplier_id=supplier.id,
+                purchase_date=as_of - timedelta(days=received),
+                invoice_number=f"INV-{number}",
+                total_amount=Decimal(cost) * max(units, 1),
+            )
+            db.add(purchase)
+            db.flush()
+            db.add(
+                PurchaseItem(
+                    purchase_id=purchase.id,
+                    medicine_id=med.id,
+                    batch_id=row.id,
+                    quantity=max(units, 1),
+                    unit_cost=Decimal(cost),
+                    line_total=Decimal(cost) * max(units, 1),
+                )
+            )
+            db.flush()
+
+        return row
+
+    def sell(med: Medicine, from_batch: Batch, units: int, days_ago: int) -> None:
+        sale = Sale(
+            customer_id=None,
+            total_amount=Decimal(units) * med.mrp,
+            sold_at=datetime.combine(
+                as_of - timedelta(days=days_ago), datetime.min.time()
+            ),
+        )
+        db.add(sale)
+        db.flush()
+        db.add(
+            SaleItem(
+                sale_id=sale.id,
+                medicine_id=med.id,
+                batch_id=from_batch.id,
+                quantity=units,
+                unit_price=med.mrp,
+                line_total=Decimal(units) * med.mrp,
+            )
+        )
+        db.flush()
+
+    paracetamol = medicine("Paracetamol 500", "30.00")
+    p1 = batch(paracetamol, "IP1", units=100, cost="20.00", received=45)
+    sell(paracetamol, p1, 900, days_ago=30)
+
+    amoxicillin = medicine("Amoxicillin 250", "80.00")
+    batch(amoxicillin, "IA1", units=500, cost="50.00", received=300)
+
+    cetirizine = medicine("Cetirizine 10", "150.00")
+    c1 = batch(cetirizine, "IC1", units=400, cost="100.00", received=120)
+    sell(cetirizine, c1, 90, days_ago=30)
+
+    cough = medicine("Cough Syrup 100ml", "70.00")
+    s1 = batch(cough, "IS1", units=60, cost="40.00", received=210)
+    sell(cough, s1, 50, days_ago=200)
+
+    vitamin_c = medicine("Vitamin C 500", "25.00")
+    v1 = batch(vitamin_c, "IV1", units=150, cost="15.00", received=60)
+    sell(vitamin_c, v1, 90, days_ago=30)
+
+    ibuprofen = medicine("Ibuprofen 400", "18.00")
+    i1 = batch(ibuprofen, "II1", units=60, cost="10.00", expires_in=200, received=30)
+    # Expired, and with no purchase line - so it contributes capital but neither
+    # cover nor stock age.
+    batch(ibuprofen, "II2", units=40, cost="10.00", expires_in=-5)
+    sell(ibuprofen, i1, 90, days_ago=30)
+
+    domperidone = medicine("Domperidone 10", "12.00")
+    batch(domperidone, "ID1", units=0, cost="15.00")
+
+    db.commit()
+
+    return {
+        "paracetamol": paracetamol,
+        "amoxicillin": amoxicillin,
+        "cetirizine": cetirizine,
+        "cough_syrup": cough,
+        "vitamin_c": vitamin_c,
+        "ibuprofen": ibuprofen,
+        "domperidone": domperidone,
+        "supplier": supplier,
     }

@@ -41,7 +41,7 @@ import app.models  # noqa: E402,F401  — registers every table on Base.metadata
 from app.ai.nodes import memory_persistor, memory_retriever  # noqa: E402
 from app.core.database import Base  # noqa: E402
 from app.core.logging_config import configure_logging  # noqa: E402
-from tests.factories import seed_expiry_scenario, seed_scenario  # noqa: E402
+from tests.factories import seed_expiry_scenario, seed_inventory_scenario, seed_scenario  # noqa: E402
 from tests.fakes import FakeLLM, FakeMemoryRepository, default_responses  # noqa: E402
 
 # Node modules that did `from app.ai.llm import get_llm`. That binds the function
@@ -54,6 +54,8 @@ _LLM_NODE_MODULES = (
     "app.ai.nodes.memory_extractor",
     "app.ai.nodes.expiry_planner",
     "app.ai.nodes.expiry_analyzer",
+    "app.ai.nodes.inventory_planner",
+    "app.ai.nodes.inventory_analyzer",
 )
 
 
@@ -186,6 +188,22 @@ def expiry_app_db(db_session):
     from app.core.time_range import today
 
     seed_expiry_scenario(db_session, today())
+    return db_session
+
+
+@pytest.fixture
+def inventory_app_db(db_session):
+    """The inventory scenario anchored to the REAL today.
+
+    Same reasoning as ``expiry_app_db``: production always assesses against today,
+    there is deliberately no way to pass ``as_of`` through the graph, and the
+    scenario is defined in relative days so every derived figure is identical
+    whichever day it runs on.
+    """
+
+    from app.core.time_range import today
+
+    seed_inventory_scenario(db_session, today())
     return db_session
 
 
