@@ -1953,3 +1953,26 @@ graph LR
 
 The repository only ever flushes. The service owns the one commit — otherwise a
 failure halfway leaves a purchase header pointing at batches that never existed.
+
+---
+
+## Medicine catalogue vs stock — the two-step that confuses everyone
+
+```mermaid
+graph LR
+    A["1. Add medicine<br/>/medicines<br/>POST /api/v1/medicines<br/><b>ZERO units exist</b>"]:::a
+    B["2. Receive stock<br/>/receive<br/>POST /api/v1/purchases<br/><b>the batch is created</b>"]:::b
+    C["3. Sell<br/>billing<br/>batch quantity goes DOWN"]:::c
+    A --> B --> C
+
+    D["inventory / expiry / reorder<br/>read batches, not medicines"]:::d
+    B -.->|"only now visible to"| D
+
+    classDef a fill:#e0e7ff,stroke:#44c,stroke-width:3px,color:#000
+    classDef b fill:#d6ffd9,stroke:#0a0,stroke-width:3px,color:#000
+    classDef c fill:#fff4cc,stroke:#c90,stroke-width:3px,color:#000
+    classDef d fill:#f0f0f0,stroke:#888,stroke-width:2px,color:#000
+```
+
+Step 1 cannot be skipped: `/receive` returns **404** for a medicine that is not in
+the catalogue, so a receipt form can never invent five spellings of Crocin.

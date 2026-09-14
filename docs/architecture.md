@@ -19,8 +19,8 @@ flowchart TB
 
     subgraph FE["Next.js frontend — pharmacy-frontend/ (Pages Router)"]
         PG["pages/ — index, medicines, receive, reorder, sales, expiry, inventory"]
-        CMP["src/components/ — ui, billing, expiry, inventory, receive"]
-        APIC["src/lib/api/ — client, index, billing, sales, expiry, inventory, purchases"]
+        CMP["src/components/ — ui, billing, expiry, inventory, receive, medicines"]
+        APIC["src/lib/api/ — client, index, billing, sales, expiry, inventory, purchases, medicines"]
     end
 
     subgraph API["FastAPI — app/main.py"]
@@ -201,8 +201,8 @@ documented in full in the feature doc.
 ```
 
 **Frontend:** Vitest + React Testing Library + jsdom in `pharmacy-frontend`
-(`npm test`). 81 tests — 22 over the expiry page, 29 over the inventory page, 30 over
-the goods receipt page. `fetch`
+(`npm test`). 103 tests — 22 over the expiry page, 29 over the inventory page, 30
+over the goods receipt page, 22 over the medicines page. `fetch`
 is the mock boundary so the API client and its error mapping stay under test. Billing
 and sales pages are not covered yet. See [`testing.md`](testing.md).
 

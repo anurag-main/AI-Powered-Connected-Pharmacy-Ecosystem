@@ -4,6 +4,7 @@ import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import Icon from "@/components/ui/icon";
 import { listMedicines } from "@/lib/api";
+import AddMedicineForm from "@/components/medicines/AddMedicineForm";
 
 const rupee = (n) => `₹${Number(n).toFixed(2)}`;
 
@@ -17,6 +18,13 @@ function MedicinesPage() {
             .catch(() => setError(true));
     }, []);
 
+    // After a create, re-read the list from the server rather than appending the
+    // new row locally. An optimistic append would show a row the table cannot
+    // prove is there, and the id and timestamps come from MySQL anyway.
+    const handleCreated = () => {
+        listMedicines().then(({ ok, data }) => ok && setMedicines(data));
+    };
+
     return (
         <div className="space-y-6">
             <div>
@@ -25,9 +33,12 @@ function MedicinesPage() {
                     Medicines
                 </h1>
                 <p className="text-sm text-muted-foreground mt-1">
-                    The catalog the billing screen draws from.
+                    The catalog the billing screen draws from. Adding a medicine here does not
+                    add stock — record a delivery on Receive Stock for that.
                 </p>
             </div>
+
+            <AddMedicineForm onCreated={handleCreated} />
 
             {error && (
                 <div className="rounded-xl bg-rose-50 text-rose-700 border border-rose-200 px-4 py-3 text-sm">

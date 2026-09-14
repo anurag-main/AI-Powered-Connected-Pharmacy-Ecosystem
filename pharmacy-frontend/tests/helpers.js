@@ -338,3 +338,40 @@ export function mockPurchasesApi({
     vi.stubGlobal("fetch", mock);
     return mock;
 }
+
+// ── Medicine catalogue writes ────────────────────────────────────────────────
+
+/**
+ * Mock the two calls the medicines page makes: the list, and the create.
+ *
+ * `listSequence` lets a test give a different body to the second GET, which is
+ * how the "table refreshes after a create" assertion is made without mocking our
+ * own API module.
+ */
+export function mockMedicinesApi({
+    medicines = [makeCatalogueMedicine()],
+    listSequence = null,
+    postResponse = makeCatalogueMedicine({ id: 101, name: "Shelcal 500" }),
+    postStatus = 201,
+    listStatus = 200,
+    networkError = false,
+    hold = null,
+} = {}) {
+    let listCall = 0;
+
+    const mock = vi.fn(async (url, options) => {
+        if (networkError) throw new TypeError("Failed to fetch");
+
+        if (options?.method === "POST") {
+            if (hold) await hold;
+            return jsonResponse(postResponse, postStatus);
+        }
+
+        const body = listSequence ? listSequence[Math.min(listCall, listSequence.length - 1)] : medicines;
+        listCall += 1;
+        return jsonResponse(body, listStatus);
+    });
+
+    vi.stubGlobal("fetch", mock);
+    return mock;
+}

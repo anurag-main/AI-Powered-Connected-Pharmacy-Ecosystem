@@ -1468,3 +1468,42 @@ logs a rollback for what is really a user typo.
 
 Different codes because they ask for different actions.
 `422` = fix your typing. `409` = go and look at the physical carton.
+
+---
+
+## Adding a medicine ≠ adding stock
+
+Two notebooks again. Writing "Shelcal 500" in the **name list** creates zero
+tablets. Only a goods receipt writes the **box list**.
+
+A medicine with no batch is invisible to every report — the inventory query says
+`HAVING stock_quantity > 0`, so it is not "showing 0", it is *not there at all*.
+
+### The HSN decision — worth remembering
+
+`30049099` is the HSN code on most tablets. Pre-filling it would save typing.
+I left the field **blank** anyway, with the common value as a hint.
+
+It is a **tax code**. A default that is right most of the time is wrong some of
+the time, silently, and it surfaces at GST filing rather than at entry.
+
+**Lesson:** convenience defaults are fine for a filter. They are not fine for a
+field with a legal consequence. Ask what happens when the default is wrong and
+nobody notices.
+
+### FastAPI returns TWO different error shapes
+
+| Source | `detail` is |
+|---|---|
+| our own `HTTPException(409, "...")` | a **string** |
+| Pydantic validation (422) | an **array** of `{loc, msg, type}` |
+
+Rendering the array in React prints `[object Object]`. Any code that shows
+`detail` must check `typeof detail === "string"` first. This is now handled in
+both `purchases.js` and `medicines.js`.
+
+### 3 beginner mistakes
+1. Adding a medicine and expecting stock. Two tables, two meanings.
+2. Rendering `error.detail` blindly → `[object Object]` on a 422.
+3. Showing a 500's `detail` to a user. A 409's detail is written by us and is
+   safe; a 500's is whatever the driver raised.

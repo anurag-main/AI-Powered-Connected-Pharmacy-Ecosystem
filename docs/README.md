@@ -52,6 +52,7 @@ docs/
 | Tool Agent (experimental) | **Undocumented and untested** | — |
 | **Inventory Risk** | Documented to the standard, backend **and** frontend | [`agents/inventory_risk_agent.md`](agents/inventory_risk_agent.md), [`features/inventory_risk.md`](features/inventory_risk.md) |
 | **Goods Receipt** | Documented to the standard, backend **and** frontend. The only write path for stock | [`features/goods_receipt.md`](features/goods_receipt.md) |
+| **Medicine Catalogue** | Documented to the standard. Add form over the existing endpoint; names and prices, never stock | [`features/medicine_catalogue.md`](features/medicine_catalogue.md) |
 
 ## Features
 
