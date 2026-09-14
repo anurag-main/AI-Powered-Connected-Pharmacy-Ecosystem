@@ -50,7 +50,7 @@ docs/
 | Reorder | Partial — [`03_reorder_agent.md`](03_reorder_agent.md) | not yet at the standard |
 | Billing | Partial — [`02_billing_agent.md`](02_billing_agent.md) | frozen; not being extended |
 | Tool Agent (experimental) | **Undocumented and untested** | — |
-| **Inventory Risk** | Documented to the standard. Backend complete; **no frontend yet** | [`agents/inventory_risk_agent.md`](agents/inventory_risk_agent.md), [`features/inventory_risk.md`](features/inventory_risk.md) |
+| **Inventory Risk** | Documented to the standard, backend **and** frontend | [`agents/inventory_risk_agent.md`](agents/inventory_risk_agent.md), [`features/inventory_risk.md`](features/inventory_risk.md) |
 
 ## Features
 

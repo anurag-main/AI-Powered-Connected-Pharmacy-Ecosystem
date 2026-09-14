@@ -9,6 +9,7 @@
  *   billing.js   catalog, per-line pricing, confirm
  *   sales.js     invoice history
  *   expiry.js    deterministic report + AI explanation
+ *   inventory.js deterministic capital report + AI explanation
  */
 import { getJSON, postJSON } from "./client";
 
@@ -36,6 +37,18 @@ export function approveReorder(proposal) {
 
 // ── Feature modules ──────────────────────────────────────────────────────────
 export * from "./billing";
-export * from "./expiry";
 export * from "./sales";
 export { ERROR_MESSAGES } from "./client";
+
+// expiry.js and inventory.js are deliberately NOT re-exported here.
+//
+// Both define RISK_OPTIONS, LIMIT_OPTIONS, RISK_LEVELS and toQuery, because both
+// are risk reports with a filter bar. Two `export *` with the same names is an
+// ambiguous re-export: the name is silently dropped rather than erroring, so
+// `import { RISK_OPTIONS } from "@/lib/api"` would quietly be undefined and the
+// filter dropdown would render empty.
+//
+// Renaming them would be worse — EXPIRY_RISK_OPTIONS inside expiry.js is noise.
+// They are imported by path instead:
+//
+//   import { RISK_OPTIONS } from "@/lib/api/inventory";

@@ -5,7 +5,7 @@
 > [`AI_Pharma_15LPA_Roadmap.md`](../AI_Pharma_15LPA_Roadmap.md) and
 > [`05_architecture_audit.md`](05_architecture_audit.md).
 >
-> Last verified against the source: **2026-09-13**.
+> Last verified against the source: **2026-09-14**.
 > Backend paths are relative to `pharmacy-core-backend/`, frontend paths to
 > `pharmacy-frontend/`.
 
@@ -18,9 +18,9 @@ flowchart TB
     USER([Pharmacy user])
 
     subgraph FE["Next.js frontend — pharmacy-frontend/ (Pages Router)"]
-        PG["pages/ — index, medicines, reorder, sales, expiry"]
-        CMP["src/components/ — ui, billing, expiry"]
-        APIC["src/lib/api/ — client, index, billing, sales, expiry"]
+        PG["pages/ — index, medicines, reorder, sales, expiry, inventory"]
+        CMP["src/components/ — ui, billing, expiry, inventory"]
+        APIC["src/lib/api/ — client, index, billing, sales, expiry, inventory"]
     end
 
     subgraph API["FastAPI — app/main.py"]
@@ -150,7 +150,7 @@ Those are Python. The model chooses *what to ask for* and *how to say the answer
 | Reorder | `reorder_graph.py` | `GET`/`POST /api/v1/reorder` | deterministic reorder suggestions | [`03_reorder_agent.md`](03_reorder_agent.md) |
 | Business Intelligence | `business_graph.py` | `POST /api/v1/business/analyze` | planner → fetcher → analyzer → reflection loop; ChromaDB memory | [`business_queries.md`](business_queries.md), [`04_bi_agent_qa_report.md`](04_bi_agent_qa_report.md) |
 | **Expiry Risk** | `expiry_graph.py` | `POST /api/v1/expiry/{analyze,report,explain}` | planner → fetcher → analyzer, no loop; planner skipped when a query is supplied. **Has a UI** at `/expiry` | [`agents/expiry_risk_agent.md`](agents/expiry_risk_agent.md) |
-| **Inventory Risk** | `inventory_graph.py` | `POST /api/v1/inventory/{analyze,report,explain}` | planner → fetcher → analyzer, no loop; planner skipped when a query is supplied. **No UI yet** | [`agents/inventory_risk_agent.md`](agents/inventory_risk_agent.md) |
+| **Inventory Risk** | `inventory_graph.py` | `POST /api/v1/inventory/{analyze,report,explain}` | planner → fetcher → analyzer, no loop; planner skipped when a query is supplied. **Has a UI** at `/inventory` | [`agents/inventory_risk_agent.md`](agents/inventory_risk_agent.md) |
 | Tool Agent (experimental) | `business_tool_graph.py` | `POST /tool-agent/...` | native LangGraph tool calling | none — **untested**, `FakeLLM` does not script tool binding |
 
 Billing is **not** being developed further as an AI agent. It stays as built; the
@@ -193,19 +193,20 @@ documented in full in the feature doc.
 ### Testing — [`testing.md`](testing.md)
 
 ```text
-647 passed (unit + integration)
+795 passed, 7 skipped
   unit         533
   integration  114
   evaluation    52 passed + 5 skipped — not re-run since the DemandService extraction
 ```
 
 **Frontend:** Vitest + React Testing Library + jsdom in `pharmacy-frontend`
-(`npm test`). 22 tests over the expiry page; `fetch` is the mock boundary so the API
-client and its error mapping stay under test. Billing and sales pages are not covered
-yet. See [`testing.md`](testing.md).
+(`npm test`). 51 tests — 22 over the expiry page, 29 over the inventory page. `fetch`
+is the mock boundary so the API client and its error mapping stay under test. Billing
+and sales pages are not covered yet. See [`testing.md`](testing.md).
 
-Two golden sets: BI (`golden_cases.json`, 30/30 graded) and Expiry
-(`expiry_risk_cases.json`, 14/14 graded). No test calls a real LLM provider.
+Three golden sets: BI (`golden_cases.json`), Expiry (`expiry_risk_cases.json`) and
+Inventory (`inventory_risk_cases.json`, 15/15 graded + 2 skipped). No test calls a
+real LLM provider.
 
 ### Memory — `app/ai/memory/`
 
@@ -243,8 +244,7 @@ Supervisor / multi-agent routing · Forecast Agent · Supplier Risk Agent ·
 Procurement Agent · human-approval workflow · audit log · authentication ·
 RBAC · RAG · Redis · MCP · Docker · CI/CD · deployment.
 
-The Inventory Risk Agent's **frontend** does not exist yet. Its backend is complete
-and is drawn in §1; `pages/inventory.jsx` is the next step.
+Inventory Risk is complete, backend and frontend, and is drawn in §1.
 
 Add a component to the diagram in §1 **only** when its code exists and its document
 does too.

@@ -135,3 +135,103 @@ export function initOf(mock, path) {
     if (!call) throw new Error(`No request was made to ${path}`);
     return call[1];
 }
+
+// ---------------------------------------------------------------------------
+// Inventory Risk
+//
+// Separate factories rather than parameterising the expiry ones: the two reports
+// share almost no fields, and a single "make a report" helper covering both would
+// need every field optional, which is how a test ends up asserting against a shape
+// the backend never returns.
+// ---------------------------------------------------------------------------
+
+/** The shape the backend actually returns for one medicine. Override what a test cares about. */
+export function makeInventoryItem(overrides = {}) {
+    return {
+        medicine_id: 1,
+        medicine_name: "Paracetamol 500",
+        stock_quantity: 400,
+        inventory_value: 40000.0,
+        sellable_quantity: 400,
+        weighted_avg_cost: 100.0,
+        units_sold: 90,
+        daily_velocity: 1.0,
+        days_of_cover: 400.0,
+        last_sale_date: "2026-08-14",
+        days_since_last_sale: 30,
+        ever_sold: true,
+        target_stock: 60,
+        excess_units: 340,
+        excess_value: 34000.0,
+        capital_at_risk: 34000.0,
+        oldest_receipt_date: "2026-05-16",
+        stock_age_days: 120,
+        risk_level: "critical",
+        risk_reasons: ["400 unit(s) in stock", "400 day(s) of cover"],
+        ...overrides,
+    };
+}
+
+/** A full /inventory/report body. Mirrors InventoryReportResponse field for field. */
+export function makeInventoryReport(overrides = {}) {
+    const items = overrides.items ?? [makeInventoryItem()];
+    return {
+        generated_for: "2026-09-14",
+        demand_lookback_days: 90,
+        target_cover_days: 60,
+        medicines_reviewed: items.length,
+        medicines_without_stock: 0,
+        items_matching_filter: items.length,
+        total_inventory_value: 72650.0,
+        total_capital_at_risk: 62750.0,
+        capital_at_risk_in_view: 62750.0,
+        counts_by_risk: { dead: 0, critical: 1, high: 0, medium: 0, healthy: 0 },
+        notes: ["Velocity is an estimate from history, not a forecast."],
+        execution_time_ms: 44,
+        ...overrides,
+        items,
+    };
+}
+
+/** An /inventory/explain body. */
+export function makeInventoryExplanation(overrides = {}) {
+    return {
+        answer: "Rs 62,750 is at risk across the shop.",
+        confidence: 0.8,
+        execution_time_ms: 5492,
+        agent_version: "inventory-agent-v1",
+        ...overrides,
+    };
+}
+
+/**
+ * Install a fetch mock answering the two inventory paths.
+ *
+ * Same contract as `mockApi`, and the same reason for existing: mocking at `fetch`
+ * means `lib/api/inventory.js` (`toQuery`) and `lib/api/client.js` (status-to-message
+ * mapping) are the REAL code under test.
+ */
+export function mockInventoryApi({
+    report = makeInventoryReport(),
+    reportStatus = 200,
+    explain = makeInventoryExplanation(),
+    explainStatus = 200,
+    networkError = false,
+    hold = null,
+} = {}) {
+    const mock = vi.fn(async (url) => {
+        if (networkError) throw new TypeError("Failed to fetch");
+
+        if (String(url).includes("/api/v1/inventory/report")) {
+            if (hold) await hold;
+            return jsonResponse(report, reportStatus);
+        }
+        if (String(url).includes("/api/v1/inventory/explain")) {
+            return jsonResponse(explain, explainStatus);
+        }
+        throw new Error(`Unexpected request in test: ${url}`);
+    });
+
+    vi.stubGlobal("fetch", mock);
+    return mock;
+}

@@ -1,7 +1,7 @@
 # Inventory Risk Agent
 
 > Backend paths are relative to `pharmacy-core-backend/`.
-> Last verified against the source and against real MySQL: **2026-09-13**.
+> Last verified against the source, real MySQL and a real browser: **2026-09-14**.
 >
 > **Status: backend complete. No frontend yet.** `pages/inventory.jsx` is the next step.
 > The deterministic layer underneath is documented separately in
@@ -177,8 +177,79 @@ InventoryRiskReport
  -> app/routers/inventory.py            response_model validates the contract
  -> app/core/middleware.py              stamps X-Request-ID, logs request_completed
  -> JSON over HTTP
- -> (next step) src/lib/api/inventory.js -> useInventoryRisk -> pages/inventory.jsx
+ -> pharmacy-frontend/src/lib/api/client.js      request() -> {ok, data, requestId, error}
+ -> pharmacy-frontend/src/lib/api/inventory.js   getInventoryReport(query)
+ -> pharmacy-frontend/src/hooks/useInventoryRisk.js   setReport(result.data)
+ -> pharmacy-frontend/pages/inventory.jsx        picks the success state
+ -> src/components/inventory/InventorySummaryCards.jsx   the four KPIs
+    src/components/inventory/InventoryRiskTable.jsx      the ranked rows
+    src/components/inventory/InventoryAiSummary.jsx      the AI paragraph
+ -> the browser
 ```
+
+### The whole product flow, end to end
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor U as Pharmacist
+    participant P as pages/inventory.jsx
+    participant H as useInventoryRisk
+    participant A as lib/api/inventory.js
+    participant C as lib/api/client.js
+    participant R as routers/inventory.py
+    participant S as InventoryAgentService
+    participant G as inventory_graph
+    participant T as run_inventory_risk
+    participant V as InventoryRiskService
+    participant D as DemandService
+    participant Q as InventoryRepository
+    participant DB as MySQL
+    participant L as gpt-4o-mini
+
+    U->>P: opens /inventory
+    P->>H: analyze(DEFAULT_FILTERS)
+    H->>A: toQuery(filters)
+    A->>C: postJSON("/api/v1/inventory/report", query)
+    C->>R: POST (fetch)
+    R->>S: report(query)
+    S->>T: run_inventory_risk(query)
+    Note over S,T: no graph, no LLM on this path
+    T->>V: assess(query)
+    V->>Q: stock_by_medicine(as_of)
+    Q->>DB: SUM(CASE ...) GROUP BY medicine
+    V->>D: units_sold / last_sale_dates / medicines_ever_sold
+    D->>DB: 3 aggregates over sale_items JOIN sales
+    V->>Q: oldest_receipt_by_medicine(ids)
+    Q->>DB: MIN(purchase_date) JOIN purchase_items JOIN batches
+    V-->>T: InventoryRiskReport
+    T-->>R: report
+    R-->>C: 200 JSON + X-Request-ID
+    C-->>H: {ok, data, requestId}
+    H-->>P: report
+    P-->>U: cards + table render (44 ms server-side)
+
+    Note over H: only now, and only if rows came back
+    H->>A: explainInventoryRisk(THE SAME query)
+    A->>C: postJSON("/api/v1/inventory/explain", query)
+    C->>R: POST
+    R->>S: explain(query)
+    S->>G: invoke(messages, query)
+    Note over G: query is seeded, so the planner is SKIPPED
+    G->>T: fetcher -> run_inventory_risk
+    T-->>G: the same deterministic report
+    G->>L: analyzer: explain these figures
+    L-->>G: prose + confidence
+    G-->>S: answer
+    S-->>C: 200 JSON (prose only, no figures)
+    C-->>H: explanation
+    H-->>P: explanation
+    P-->>U: AI paragraph appears (~5-9 s later)
+```
+
+Two calls, not one, and the diagram shows why: everything above the note runs without
+the model. If `L` is down, the pharmacist loses the last two arrows and keeps the
+report.
 
 `/explain` and `/analyze` differ only in the middle — they go through
 `get_inventory_graph().invoke(...)`, so the fetcher calls the same
@@ -438,12 +509,22 @@ whatever it was told to. **Only a real round trip finds a prompt bug.**
 4. **Filtering happens in Python, not SQL.** Risk level and capital at risk are
    Python-side conclusions, not columns, so there is nothing for `WHERE` to filter on.
    Fine at a few hundred medicines; it would need rethinking at tens of thousands.
-5. **No authentication**, and this is the most sensitive endpoint in the system.
+5. **No authentication**, and this is the most sensitive endpoint in the system —
+   it now has a UI, which makes the exposure larger, not smaller.
 6. **Velocity is flat-projected history**, not a forecast.
 7. **`target_cover_days` is one number for the whole catalogue.** A cold-chain
    injectable and a paracetamol strip genuinely warrant different targets; per-category
    targets need a category column that does not exist.
-8. **No frontend yet.**
+8. **The AI paragraph is rendered by a two-rule formatter**, not a markdown
+   parser. `**bold**` and inline numbered lists are handled; tables, links and
+   headings are not. If the model starts emitting those they will show as literal
+   characters.
+9. **The table scrolls horizontally below about 900px.** Nine columns of figures do
+   not reflow usefully, and this is a desktop counter application. A card layout for
+   phones was judged over-engineering rather than built badly.
+10. **No pagination.** `limit` tops out at 100, the backend's bound. With 96 stocked
+    medicines that is the whole catalogue today; a larger shop would need paging
+    rather than a bigger limit.
 
 ---
 
@@ -456,3 +537,20 @@ cards and table, `/explain` fills the paragraph seconds later and fails softly.
 
 `RiskBadge.jsx` should be generalised to take a level→style map rather than forked,
 since this agent's levels differ from the expiry agent's.
+## 14. Recommended next milestone
+
+M5 is complete: discovery, the shared `DemandService`, the deterministic domain, the
+agent and API, and the frontend.
+
+The strongest next step is a **Supervisor Agent**. There are now four agents reachable
+only by choosing a URL — Billing, Reorder, BI, Expiry Risk, Inventory Risk — and a
+pharmacist has to know which screen answers which question. "Why am I out of Crocin?"
+spans three of them. A Supervisor is also the piece that makes the existing agents
+worth more without rewriting any of them.
+
+Two smaller items worth doing first, both already identified and neither large:
+
+* **Authentication.** `/inventory` exposes cost price and total capital in a browser.
+  It is the most sensitive screen in the system and it is currently open.
+* **A nightly stock-snapshot table.** It is the one missing piece of data blocking
+  real inventory turnover, and every day without it is a day of history not captured.

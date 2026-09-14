@@ -7,13 +7,23 @@ import AiProse from "@/components/ui/ai-prose";
  * The AI paragraph, and the report's own data caveats.
  *
  * This panel only renders text the backend produced. It holds no figures of its
- * own — the cards and the table above are the source of truth for every number, so
- * the two can never drift apart on screen.
+ * own — the cards and the table are the source of truth for every number, so the
+ * two can never drift apart on screen.
  *
  * It loads after the table and fails softly: if the model is slow or down, the
- * pharmacist loses a paragraph, not the report.
+ * pharmacist loses a paragraph, not the report. Measured at ~5.5s against the
+ * report's 44ms, which is the whole reason these are two calls.
+ *
+ * The "AI-written" label is not decoration. Everything else on this page is
+ * arithmetic a pharmacist can check; this paragraph is the one part that was
+ * generated, and it should be read differently.
  */
-export default function ExpiryAiSummary({ explanation, explaining, error, notes }) {
+export default function InventoryAiSummary({
+    explanation,
+    explaining,
+    error,
+    notes,
+}) {
     return (
         <Card className="gap-0 border-primary/20 bg-primary/[0.03] p-5">
             <div className="flex items-center gap-2">
@@ -50,7 +60,17 @@ export default function ExpiryAiSummary({ explanation, explaining, error, notes 
                 )}
 
                 {!explaining && !error && explanation && (
-                    <AiProse text={explanation.answer} />
+                    <>
+                        <AiProse text={explanation.answer} />
+                        <p className="mt-3 flex items-start gap-2 text-[11px] text-muted-foreground">
+                            <Icon name="info" size={13} className="mt-px shrink-0" />
+                            <span>
+                                Written by AI from the figures above. The numbers
+                                themselves are calculated from your stock and sales
+                                records, not generated.
+                            </span>
+                        </p>
+                    </>
                 )}
             </div>
 

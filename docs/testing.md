@@ -304,9 +304,10 @@ npm run test:watch  # vitest
 
 ```text
 tests/
-├── setup.js                 jest-dom matchers; stubs global fetch to THROW by default
-├── helpers.js               response fixtures + the fetch mock
-└── expiry-page.test.jsx     22 tests over pages/expiry.jsx
+├── setup.js                   jest-dom matchers; stubs global fetch to THROW by default
+├── helpers.js                 response fixtures + the fetch mocks, per feature
+├── expiry-page.test.jsx       22 tests over pages/expiry.jsx
+└── inventory-page.test.jsx    29 tests over pages/inventory.jsx
 ```
 
 **Stack:** Vitest 5 + React Testing Library 16 + jsdom. `vitest.config.mjs` sets the
@@ -323,23 +324,43 @@ mapping, `X-Request-ID`) — the two places a frontend bug actually hides. Mocki
 `fetch` keeps both under test and lets the parameter tests assert the real URL,
 method and body.
 
+**Fixtures are per feature, not shared.** `makeReport` and `makeInventoryReport` are
+separate factories even though both build "a risk report". The two responses share
+almost no fields, and one factory covering both would need every field optional —
+which is how a test ends up asserting against a shape the backend never returns.
+
 `setup.js` installs a `fetch` stub that throws. A test that forgets to script a
 response fails loudly rather than reaching FastAPI, MySQL or OpenAI.
 
 ### What is covered
 
-Only the expiry page today: loading, success, empty, error, request parameters, and
-that backend values are displayed unchanged. The billing and sales pages have no
+The expiry and inventory pages: loading, success, empty, error, request parameters,
+and that backend values are displayed unchanged. The billing and sales pages have no
 tests yet.
 
-These assert **display**, never business logic. Whether excess or value at risk is
-*correct* belongs to the backend's 196 expiry tests; the frontend tests prove the UI
-asks the right question and prints the answer it was given.
+These assert **display**, never business logic. Whether excess or capital at risk is
+*correct* belongs to the backend's own tests; the frontend tests prove the UI asks the
+right question and prints the answer it was given.
+
+Two rules are pinned on the inventory page specifically, both learned from real
+failures rather than imagined:
+
+**A backend `null` must never render as `0`.** `days_of_cover` is null when nothing is
+selling; `stock_age_days` is null when a batch predates purchase records. The reflex
+`Number(x) || 0` prints `0d` and states a fact the backend deliberately refused to
+state. Two tests assert the em-dash and the absence of `0d`.
+
+**The model's markdown must not reach the screen.** `answer` is a plain string and
+gpt-4o-mini writes `**bold**` into it; a plain `<p>` renders the asterisks. Caught in
+a real browser, not by any test, because a scripted fake returns whatever it was told
+to. Now handled by `src/components/ui/ai-prose.jsx` and pinned by two tests — one that
+the asterisks are gone, one that unformatted prose is *not* fragmented.
 
 ### Known debt
 
 | Gap | Why |
 |---|---|
-| Billing and sales pages untested | Expiry was the milestone; these follow with their own feature work |
+| Billing and sales pages untested | Expiry and inventory were the milestones; these follow with their own feature work |
+| `ai-prose.jsx` is two rules, not a parser | Tables, links and headings from the model would render as literal characters. A markdown dependency is not worth it until the model actually emits them |
 | No component-level tests | Components are exercised through the page, which is where the behaviour is visible. Isolated tests would add count, not confidence |
 | No coverage measurement | Same reasoning as the backend — a number nobody acts on is not worth a dependency |
