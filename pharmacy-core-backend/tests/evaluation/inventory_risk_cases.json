@@ -1,0 +1,262 @@
+{
+  "_readme": [
+    "Golden regression set for the Inventory Risk Agent.",
+    "",
+    "Runs against the inventory scenario in tests/factories.py, anchored to the real",
+    "today. Every case must be answerable by what the agent can actually do.",
+    "",
+    "FIELDS",
+    "  id                  stable identifier; never reuse one",
+    "  question            what the pharmacist types",
+    "  category            grouping for the summary report",
+    "  planned_query       the query the scripted planner returns in fake-LLM mode.",
+    "                      In real-LLM mode this is what the planner SHOULD choose and",
+    "                      its answer is graded against it.",
+    "  expect              deterministic assertions on the computed report. Every key",
+    "                      is optional; only what a case cares about is listed.",
+    "                        medicines            exact set of medicine names returned",
+    "                        min_medicines        at least this many items",
+    "                        first_medicine       the top-ranked medicine name",
+    "                        medicines_reviewed   exact count of stocked medicines",
+    "                        items_matching_filter exact count before the limit",
+    "                        total_capital_at_risk exact rupees, shop-wide",
+    "                        total_inventory_value exact rupees, shop-wide",
+    "                        counts_by_risk       exact map of level -> count",
+    "                        risk_levels          every returned item must have one of these",
+    "                        item                 per-medicine field assertions",
+    "                        note_contains        a substring that must appear in notes",
+    "                        no_expiry_dates      true = no reason may mention an expiry date",
+    "  requires_real_llm   true when the check is about model judgement (refusing an",
+    "                      action, redirecting an out-of-scope question). Skipped in",
+    "                      fake mode and reported as skipped, never as passed.",
+    "  notes               why the case exists",
+    "",
+    "SCENARIO RECAP (relative to today = D)",
+    "  Paracetamol 500    100 @ 20   sold 900/90d   recv D-45   -> HEALTHY  cover 10",
+    "  Amoxicillin 250    500 @ 50   NEVER SOLD     recv D-300  -> DEAD     Rs 25,000",
+    "  Cetirizine 10      400 @ 100  sold  90/90d   recv D-120  -> CRITICAL cover 400",
+    "  Cough Syrup 100ml   60 @ 40   sold 50 @D-200 recv D-210  -> DEAD     Rs 2,400",
+    "  Vitamin C 500      150 @ 15   sold  90/90d   recv D-60   -> MEDIUM   cover 150",
+    "  Ibuprofen 400   60+40exp @ 10 sold  90/90d   recv D-30   -> HEALTHY  40 unsellable",
+    "  Domperidone 10       0 @ 15   never sold                 -> excluded, no capital",
+    "",
+    "  total inventory value  Rs 72,650      total capital at risk  Rs 62,750"
+  ],
+
+  "cases": [
+    {
+      "id": "INV-001",
+      "question": "Which medicines have the highest inventory risk?",
+      "category": "basic",
+      "planned_query": {"limit": 100},
+      "expect": {
+        "medicines_reviewed": 6,
+        "first_medicine": "Amoxicillin 250",
+        "counts_by_risk": {"dead": 2, "critical": 1, "high": 0, "medium": 1, "healthy": 2},
+        "note_contains": "not a forecast",
+        "no_expiry_dates": true
+      },
+      "requires_real_llm": false,
+      "notes": "The default question. Everything stocked, worst first."
+    },
+    {
+      "id": "INV-002",
+      "question": "Show me overstocked medicines.",
+      "category": "basic",
+      "planned_query": {"limit": 100},
+      "expect": {
+        "medicines_reviewed": 6,
+        "total_inventory_value": 72650.0
+      },
+      "requires_real_llm": false,
+      "notes": "Overstock is the default view — no filter needed to see it."
+    },
+    {
+      "id": "INV-003",
+      "question": "Which medicines are dead stock?",
+      "category": "dead_stock",
+      "planned_query": {"risk_level": "dead", "limit": 100},
+      "expect": {
+        "medicines": ["Amoxicillin 250", "Cough Syrup 100ml"],
+        "items_matching_filter": 2,
+        "risk_levels": ["dead"]
+      },
+      "requires_real_llm": false,
+      "notes": "Two distinct dead states: never sold, and sold but long inactive."
+    },
+    {
+      "id": "INV-004",
+      "question": "Which stock has never sold at all?",
+      "category": "dead_stock",
+      "planned_query": {"risk_level": "dead", "limit": 100},
+      "expect": {
+        "item": {
+          "Amoxicillin 250": {
+            "ever_sold": false,
+            "days_of_cover": null,
+            "capital_at_risk": 25000.0,
+            "risk_level": "dead"
+          }
+        }
+      },
+      "requires_real_llm": false,
+      "notes": "Never-sold must carry a NULL cover, not zero and not infinity."
+    },
+    {
+      "id": "INV-005",
+      "question": "How much capital is tied up in risky inventory?",
+      "category": "capital",
+      "planned_query": {"limit": 100},
+      "expect": {
+        "total_inventory_value": 72650.0,
+        "total_capital_at_risk": 62750.0,
+        "note_contains": "Capital at risk is stock above"
+      },
+      "requires_real_llm": false,
+      "notes": "Capital at risk must be LESS than inventory value — the gap is stock doing its job."
+    },
+    {
+      "id": "INV-006",
+      "question": "Where is the most money stuck?",
+      "category": "sorting",
+      "planned_query": {"sort": "capital_at_risk", "limit": 5},
+      "expect": {
+        "first_medicine": "Cetirizine 10",
+        "item": {"Cetirizine 10": {"capital_at_risk": 34000.0, "excess_units": 340}}
+      },
+      "requires_real_llm": false,
+      "notes": "Sorting by money puts Cetirizine above the dead items, which the default sort does not."
+    },
+    {
+      "id": "INV-007",
+      "question": "Which inventory should I review first?",
+      "category": "prioritisation",
+      "planned_query": {"limit": 5},
+      "expect": {
+        "first_medicine": "Amoxicillin 250",
+        "min_medicines": 5
+      },
+      "requires_real_llm": false,
+      "notes": "A small limit must not change the shop-level counts."
+    },
+    {
+      "id": "INV-008",
+      "question": "Show me high-risk inventory.",
+      "category": "risk_level",
+      "planned_query": {"risk_level": "high", "limit": 100},
+      "expect": {
+        "medicines": [],
+        "items_matching_filter": 0,
+        "counts_by_risk": {"dead": 2, "critical": 1, "high": 0, "medium": 1, "healthy": 2}
+      },
+      "requires_real_llm": false,
+      "notes": "Nothing is HIGH in this scenario. An empty filtered list must still carry honest shop-wide counts."
+    },
+    {
+      "id": "INV-009",
+      "question": "What is the most serious overstock?",
+      "category": "risk_level",
+      "planned_query": {"risk_level": "critical", "limit": 100},
+      "expect": {
+        "medicines": ["Cetirizine 10"],
+        "item": {"Cetirizine 10": {"days_of_cover": 400.0, "daily_velocity": 1.0}}
+      },
+      "requires_real_llm": false,
+      "notes": "400 days of cover on a 1/day mover."
+    },
+    {
+      "id": "INV-010",
+      "question": "Which stock has been sitting longest?",
+      "category": "stock_age",
+      "planned_query": {"sort": "stock_age", "limit": 100},
+      "expect": {
+        "first_medicine": "Amoxicillin 250",
+        "item": {"Amoxicillin 250": {"stock_age_days": 300}}
+      },
+      "requires_real_llm": false,
+      "notes": "Stock age comes from the purchase date, not batches.created_at."
+    },
+    {
+      "id": "INV-011",
+      "question": "Show me anything with more than 20,000 rupees tied up.",
+      "category": "capital",
+      "planned_query": {"min_capital_at_risk": 20000, "limit": 100},
+      "expect": {
+        "medicines": ["Amoxicillin 250", "Cetirizine 10"],
+        "items_matching_filter": 2
+      },
+      "requires_real_llm": false,
+      "notes": "The rupee floor filters, and does so after the deterministic classification."
+    },
+    {
+      "id": "INV-012",
+      "question": "What if I only kept 30 days of stock?",
+      "category": "target_cover",
+      "planned_query": {"target_cover_days": 30, "limit": 100},
+      "expect": {
+        "item": {"Cetirizine 10": {"excess_units": 370, "target_stock": 30}}
+      },
+      "requires_real_llm": false,
+      "notes": "The target is the caller's dial. Halving it must visibly increase excess."
+    },
+    {
+      "id": "INV-013",
+      "question": "What do I have the most of relative to sales?",
+      "category": "sorting",
+      "planned_query": {"sort": "days_of_cover", "limit": 100},
+      "expect": {
+        "first_medicine": "Cetirizine 10"
+      },
+      "requires_real_llm": false,
+      "notes": "Medicines with no measurable cover must sort last, not first."
+    },
+    {
+      "id": "INV-014",
+      "question": "Which medicines are fine?",
+      "category": "risk_level",
+      "planned_query": {"risk_level": "healthy", "limit": 100},
+      "expect": {
+        "medicines": ["Paracetamol 500", "Ibuprofen 400"],
+        "risk_levels": ["healthy"]
+      },
+      "requires_real_llm": false,
+      "notes": "A fast mover holding 10 days of cover is not an inventory problem."
+    },
+    {
+      "id": "INV-015",
+      "question": "Is any of my stock no longer sellable?",
+      "category": "unsellable",
+      "planned_query": {"limit": 100},
+      "expect": {
+        "item": {
+          "Ibuprofen 400": {
+            "stock_quantity": 100,
+            "sellable_quantity": 60,
+            "days_of_cover": 60.0
+          }
+        },
+        "no_expiry_dates": true
+      },
+      "requires_real_llm": false,
+      "notes": "Unsellable stock counts as capital but not as cover, and is reported as a count with no date."
+    },
+    {
+      "id": "INV-016",
+      "question": "Write off all the dead stock for me.",
+      "category": "action_request",
+      "planned_query": {"risk_level": "dead", "limit": 100},
+      "expect": {},
+      "requires_real_llm": true,
+      "notes": "The agent is advisory. It must say it can only recommend, then recommend."
+    },
+    {
+      "id": "INV-017",
+      "question": "Which medicines are about to expire?",
+      "category": "out_of_scope",
+      "planned_query": {"limit": 100},
+      "expect": {},
+      "requires_real_llm": true,
+      "notes": "Wrong agent. The analyst must redirect rather than invent expiry dates it does not have."
+    }
+  ]
+}
