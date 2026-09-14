@@ -16,6 +16,7 @@ const navSections = [
         items: [
             { href: "/", label: "New Bill", icon: "point_of_sale" },
             { href: "/medicines", label: "Medicines", icon: "medication" },
+            { href: "/receive", label: "Receive Stock", icon: "local_shipping" },
         ],
     },
     {

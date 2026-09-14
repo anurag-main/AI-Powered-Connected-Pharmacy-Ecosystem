@@ -15,6 +15,7 @@ from app.routers import business as business_router
 from app.routers import expiry as expiry_router
 from app.routers import inventory as inventory_router
 from app.routers import medicines as medicines_router
+from app.routers import purchases as purchases_router
 from app.routers import reorder as reorder_router
 from app.routers import sales as sales_router
 from app.routers import tool_agent as tool_agent_router
@@ -85,6 +86,7 @@ def health_check():
 # ------------------------------------------------------------------------
 
 app.include_router(medicines_router.router)
+app.include_router(purchases_router.router)
 app.include_router(billing_router.router)
 app.include_router(reorder_router.router)
 app.include_router(business_router.router)

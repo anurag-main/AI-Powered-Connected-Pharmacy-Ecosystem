@@ -51,6 +51,7 @@ docs/
 | Billing | Partial — [`02_billing_agent.md`](02_billing_agent.md) | frozen; not being extended |
 | Tool Agent (experimental) | **Undocumented and untested** | — |
 | **Inventory Risk** | Documented to the standard, backend **and** frontend | [`agents/inventory_risk_agent.md`](agents/inventory_risk_agent.md), [`features/inventory_risk.md`](features/inventory_risk.md) |
+| **Goods Receipt** | Documented to the standard, backend **and** frontend. The only write path for stock | [`features/goods_receipt.md`](features/goods_receipt.md) |
 
 ## Features
 

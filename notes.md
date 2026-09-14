@@ -1386,3 +1386,85 @@ field, the 2nd node's return OVERWRITES the 1st. The reducer concatenates them.
 1. LLM for the math → non-deterministic invoices, hallucinated quantities.
 2. LLM on every row → 10k medicines = 10k API calls. Batch the fuzzy ones into ONE call.
 3. Acting on the LLM directly → it hallucinates a qty. Gate it (sane-check) + human approve.
+
+---
+
+## Goods Receipt — putting stock IN
+
+### The analogy
+
+The shop has two notebooks.
+
+**Notebook 1 — the name list.** "We sell Crocin." Just names and prices. Writing
+a new name here does not mean a single tablet exists.
+
+**Notebook 2 — the box list.** "Box #47 arrived Tuesday, 200 tablets, expires
+next March, cost ₹12 each." *This* is the real stock.
+
+We could already write in Notebook 1. We had **no way at all** to write in
+Notebook 2 — and Notebook 2 is the one the Inventory and Expiry agents read.
+
+### The bug that was invisible
+
+Five screens looked finished. One command showed the hole:
+
+```
+grep -rnE '@router\.(post|put|patch|delete)' app/routers/
+```
+
+`Batch` and `Purchase` appeared in **zero** routers. Stock could only go down.
+
+**Lesson:** if only a seed script can create it, the feature was never built. Demo
+data that quietly becomes the product is a real failure mode, and it hides behind
+a UI that looks complete.
+
+### flush() vs commit() — the one to remember
+
+| | what it does |
+|---|---|
+| `flush()` | sends the INSERT, gets the auto-increment id back, **transaction still open, still reversible** |
+| `commit()` | the point of no return |
+
+A goods receipt writes 4 tables. If the repository committed after each one (like
+every other write repo in this project does), a failure on table 3 would leave a
+purchase header pointing at batches that were never created. So the repository
+only flushes, and the **service** owns the single commit.
+
+That is the **Unit of Work** pattern.
+
+### The trap I actually hit
+
+`with db.begin():` — which `persist_sale.py` uses — **raises** if a transaction is
+already open. It works there because that node opens its own `SessionLocal()` and
+writes immediately. In the service the session comes from `Depends(get_db)` and
+validation had already *read* from it, which implicitly began a transaction.
+
+Fix: explicit `try / commit() / except / rollback()`.
+
+**Lesson:** copying a pattern from elsewhere in the same codebase is not safe on
+its own. The pattern carries a precondition, and here the precondition was
+"nobody has touched this session yet".
+
+### Validate before you open the transaction
+
+All six rules run *before* the write begins. A failing rule mid-transaction still
+rolls back correctly — but it holds row locks on `batches` while it does, and it
+logs a rollback for what is really a user typo.
+
+### 3 beginner mistakes
+
+1. **Thinking "medicine" and "stock" are the same thing.** Adding a medicine row
+   adds zero units. The inventory query's `HAVING stock_quantity > 0` will not
+   even return it. Two tables, two meanings.
+2. **Trusting the client with money.** The input schema has no `total_amount` and
+   no `line_total` — not "we ignore it", but *there is no field to send it in*.
+   Same rule billing already enforces.
+3. **Letting a disabled button be the double-submit guard.** `disabled` is a hint
+   to a mouse. The second click here would not even error — same batch, same
+   expiry, same cost means the service **tops it up** and the shop's stock
+   silently doubles. Guard with a ref inside the submit function.
+
+### Bonus: 409 vs 422
+
+Different codes because they ask for different actions.
+`422` = fix your typing. `409` = go and look at the physical carton.

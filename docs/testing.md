@@ -307,7 +307,8 @@ tests/
 ├── setup.js                   jest-dom matchers; stubs global fetch to THROW by default
 ├── helpers.js                 response fixtures + the fetch mocks, per feature
 ├── expiry-page.test.jsx       22 tests over pages/expiry.jsx
-└── inventory-page.test.jsx    29 tests over pages/inventory.jsx
+├── inventory-page.test.jsx    29 tests over pages/inventory.jsx
+└── receive-page.test.jsx      30 tests over pages/receive.jsx
 ```
 
 **Stack:** Vitest 5 + React Testing Library 16 + jsdom. `vitest.config.mjs` sets the
@@ -360,7 +361,7 @@ the asterisks are gone, one that unformatted prose is *not* fragmented.
 
 | Gap | Why |
 |---|---|
-| Billing and sales pages untested | Expiry and inventory were the milestones; these follow with their own feature work |
+| Billing and sales pages untested | Expiry, inventory and goods receipt were the milestones; these follow with their own feature work |
 | `ai-prose.jsx` is two rules, not a parser | Tables, links and headings from the model would render as literal characters. A markdown dependency is not worth it until the model actually emits them |
 | No component-level tests | Components are exercised through the page, which is where the behaviour is visible. Isolated tests would add count, not confidence |
 | No coverage measurement | Same reasoning as the backend — a number nobody acts on is not worth a dependency |

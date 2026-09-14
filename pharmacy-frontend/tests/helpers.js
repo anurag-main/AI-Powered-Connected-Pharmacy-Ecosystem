@@ -235,3 +235,106 @@ export function mockInventoryApi({
     vi.stubGlobal("fetch", mock);
     return mock;
 }
+
+// ── Goods receipt (stock intake) ─────────────────────────────────────────────
+
+/** One medicine in the catalogue picker. */
+export function makeCatalogueMedicine(overrides = {}) {
+    return {
+        id: 17,
+        name: "Paracetamol 500mg",
+        mrp: 30.0,
+        hsn_code: "30049099",
+        manufacturer: "GSK",
+        created_at: "2026-01-01T00:00:00",
+        ...overrides,
+    };
+}
+
+/** One line on a recorded receipt, as the SERVER returns it. */
+export function makeReceiptLine(overrides = {}) {
+    return {
+        medicine_id: 17,
+        medicine_name: "Paracetamol 500mg",
+        batch_id: 280,
+        batch_number: "GR-A",
+        expiry_date: "2027-06-30",
+        quantity: 100,
+        unit_cost: 12.5,
+        line_total: 1250.0,
+        batch_created: true,
+        ...overrides,
+    };
+}
+
+/** A full 201 body from POST /api/v1/purchases. */
+export function makeRecordedReceipt(overrides = {}) {
+    const lines = overrides.lines ?? [makeReceiptLine()];
+    return {
+        purchase_id: 81,
+        supplier_id: 11,
+        supplier_name: "Medlife Distributors",
+        invoice_number: "INV-001",
+        purchase_date: "2026-09-14",
+        total_amount: lines.reduce((sum, l) => sum + l.line_total, 0),
+        total_units: lines.reduce((sum, l) => sum + l.quantity, 0),
+        created_at: "2026-09-14T19:57:10",
+        ...overrides,
+        lines,
+    };
+}
+
+/** A row in the recent-receipts panel. */
+export function makeReceiptSummary(overrides = {}) {
+    return {
+        purchase_id: 81,
+        supplier_id: 11,
+        supplier_name: "Medlife Distributors",
+        invoice_number: "INV-001",
+        purchase_date: "2026-09-14",
+        total_amount: 1960.0,
+        line_count: 2,
+        ...overrides,
+    };
+}
+
+/**
+ * Mock the four calls the goods receipt page makes.
+ *
+ * `postResponse` and `postStatus` drive the write. A test that wants to prove a
+ * 409 reaches the screen sets both, exactly as the backend would answer.
+ */
+export function mockPurchasesApi({
+    medicines = [makeCatalogueMedicine()],
+    suppliers = [{ id: 1, name: "Sun Pharma", phone: "022000000" }],
+    recent = [],
+    postResponse = makeRecordedReceipt(),
+    postStatus = 201,
+    medicinesStatus = 200,
+    networkError = false,
+    hold = null,
+} = {}) {
+    const mock = vi.fn(async (url, options) => {
+        if (networkError) throw new TypeError("Failed to fetch");
+        const target = String(url);
+
+        if (options?.method === "POST" && target.includes("/api/v1/purchases")) {
+            if (hold) await hold;
+            return jsonResponse(postResponse, postStatus);
+        }
+        if (target.includes("/api/v1/purchases/suppliers")) {
+            return jsonResponse(suppliers, 200);
+        }
+        if (target.includes("/api/v1/purchases")) {
+            return jsonResponse(recent, 200);
+        }
+        if (target.includes("/api/v1/medicines")) {
+            if (hold) await hold;
+            return jsonResponse(medicines, medicinesStatus);
+        }
+        throw new Error(`Unexpected request in test: ${target}`);
+    });
+
+    vi.stubGlobal("fetch", mock);
+    return mock;
+}

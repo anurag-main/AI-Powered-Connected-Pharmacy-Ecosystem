@@ -18,14 +18,15 @@ flowchart TB
     USER([Pharmacy user])
 
     subgraph FE["Next.js frontend — pharmacy-frontend/ (Pages Router)"]
-        PG["pages/ — index, medicines, reorder, sales, expiry, inventory"]
-        CMP["src/components/ — ui, billing, expiry, inventory"]
-        APIC["src/lib/api/ — client, index, billing, sales, expiry, inventory"]
+        PG["pages/ — index, medicines, receive, reorder, sales, expiry, inventory"]
+        CMP["src/components/ — ui, billing, expiry, inventory, receive"]
+        APIC["src/lib/api/ — client, index, billing, sales, expiry, inventory, purchases"]
     end
 
     subgraph API["FastAPI — app/main.py"]
         MW["RequestContextMiddleware<br/>request_id + access logs"]
         R1["/api/v1/medicines"]
+        R9["/api/v1/purchases<br/>goods receipt — the only stock WRITE"]
         R2["/api/v1/billing"]
         R3["/api/v1/reorder"]
         R4["/api/v1/business"]
@@ -200,7 +201,8 @@ documented in full in the feature doc.
 ```
 
 **Frontend:** Vitest + React Testing Library + jsdom in `pharmacy-frontend`
-(`npm test`). 51 tests — 22 over the expiry page, 29 over the inventory page. `fetch`
+(`npm test`). 81 tests — 22 over the expiry page, 29 over the inventory page, 30 over
+the goods receipt page. `fetch`
 is the mock boundary so the API client and its error mapping stay under test. Billing
 and sales pages are not covered yet. See [`testing.md`](testing.md).
 

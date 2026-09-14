@@ -1853,3 +1853,103 @@ sequenceDiagram
     S-->>R: BusinessAnalysisResponse{answer, confidence, exec_ms, version}
     R-->>U: 200 OK JSON
 ```
+
+---
+
+## Goods Receipt (Stock Intake) — the write path that was missing
+
+Until this feature, stock could only ever go DOWN. Billing decremented batches;
+nothing in the running app ever created one. Every batch came from a seed script.
+
+### What writes what
+
+```mermaid
+graph TD
+    R["POST /api/v1/purchases<br/>one supplier invoice"] --> V{"Validate<br/>BEFORE any write"}
+    V -->|"any rule fails"| E["404 / 409 / 422<br/>NOTHING written<br/>no row locks taken"]:::bad
+    V -->|"all pass"| T["ONE transaction"]
+
+    T --> S["suppliers<br/>find-or-create, case-insensitive"]
+    S --> P["purchases<br/>header, total computed by SERVER"]
+    P --> B["batches<br/>THE ACTUAL STOCK"]
+    B --> PI["purchase_items<br/>frozen cost basis"]
+    PI --> C["commit once"]
+    C --> OK["201 + the recorded receipt"]:::good
+
+    classDef bad fill:#ffd6d6,stroke:#c00,stroke-width:3px,color:#000
+    classDef good fill:#d6ffd9,stroke:#0a0,stroke-width:3px,color:#000
+```
+
+### Top-up vs create — why one batch row, never two
+
+```mermaid
+graph TD
+    A["line arrives:<br/>medicine 17, batch GR-A"] --> Q{"batch GR-A already<br/>on the shelf for 17?"}
+    Q -->|"no"| N["CREATE batch row<br/>batch_created = true"]:::good
+    Q -->|"yes"| M{"same expiry<br/>AND same cost?"}
+    M -->|"yes"| U["TOP UP quantity<br/>100 + 60 = 160<br/>batch_created = false"]:::good
+    M -->|"no"| X["409 Conflict<br/>no automatic merge exists"]:::bad
+
+    classDef bad fill:#ffd6d6,stroke:#c00,stroke-width:3px,color:#000
+    classDef good fill:#d6ffd9,stroke:#0a0,stroke-width:3px,color:#000
+```
+
+Two rows with one batch number would both be valid to FEFO, both counted by the
+inventory agent, and impossible to reconcile against one physical carton.
+
+### The full round trip
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor U as Pharmacist
+    participant P as pages/receive.jsx
+    participant H as useGoodsReceipt
+    participant A as lib/api/purchases.js
+    participant R as routers/purchases.py
+    participant S as GoodsReceiptService
+    participant Q as PurchaseRepository
+    participant DB as MySQL
+
+    U->>P: types the supplier invoice
+    P->>H: submit(form)
+    Note over H: ref guard - a 2nd click would<br/>TOP UP and double the stock
+    H->>A: toReceiptPayload(form)
+    Note over A: types only. no line_total,<br/>no total_amount. money is server-side
+    A->>R: POST /api/v1/purchases
+    R->>S: record_receipt(payload)
+
+    S->>Q: medicines_by_ids(ALL ids, one query)
+    Q->>DB: SELECT ... WHERE id IN (...)
+    Note over S: rules 1-6 checked here,<br/>BEFORE the transaction opens
+
+    rect rgb(230, 245, 230)
+        Note over S,DB: ONE commit boundary
+        S->>Q: find-or-create supplier
+        S->>Q: create_purchase(server total)
+        Q->>DB: INSERT + flush (id, not committed)
+        S->>Q: upsert batch per line
+        S->>Q: create_purchase_item per line
+        S->>DB: commit()
+    end
+
+    S-->>R: GoodsReceiptOut
+    R-->>A: 201 + X-Request-ID
+    A-->>P: the recorded receipt
+    P-->>U: totals to check against the paper invoice
+```
+
+### flush() vs commit()
+
+```mermaid
+graph LR
+    F["flush()<br/>INSERT sent to MySQL<br/>auto-increment id returned<br/>STILL REVERSIBLE"]:::ok
+    C["commit()<br/>THE POINT OF NO RETURN"]:::stop
+    F --> C
+
+    classDef ok fill:#fff4cc,stroke:#c90,stroke-width:3px,color:#000
+    classDef stop fill:#ffd6d6,stroke:#c00,stroke-width:3px,color:#000
+```
+
+The repository only ever flushes. The service owns the one commit — otherwise a
+failure halfway leaves a purchase header pointing at batches that never existed.
