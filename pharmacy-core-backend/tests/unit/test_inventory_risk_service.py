@@ -25,9 +25,9 @@ from app.models.sale_item import SaleItem
 from app.models.supplier import Supplier
 from app.repositories.inventory_repository import InventoryRepository
 from app.services.demand_service import DemandService
+from app.ai.schemas.inventory_query import InventoryRiskLevel, InventoryRiskQuery
 from app.services.inventory_risk_service import (
     InventoryRiskConfig,
-    InventoryRiskLevel,
     InventoryRiskService,
 )
 
@@ -38,7 +38,6 @@ AS_OF = date(2026, 6, 30)
 
 #: Pinned so a threshold change in the defaults cannot silently rewrite these tests.
 CONFIG = InventoryRiskConfig(
-    target_cover_days=60,
     overstock_cover_days=120,
     high_cover_days=180,
     critical_cover_days=365,
@@ -794,27 +793,18 @@ def test_very_large_inventory_does_not_break_the_arithmetic(service, build, db_s
 # ---------------------------------------------------------------------------
 
 
-def test_a_shorter_target_cover_creates_more_excess(db_session, build):
-    """The target is a business dial, not a constant, and must visibly move the
-    answer."""
+def test_a_shorter_target_cover_creates_more_excess(service, build, db_session):
+    """The target lives on the query, not in config: it answers "what if I only held
+    30 days?", which is a question a caller asks, not a deployment setting. It must
+    visibly move the answer."""
 
     medicine = build.stock("Cetirizine 10", units=400, cost="100.00")
     build.sell(medicine, units=90, days_ago=30)
     db_session.commit()
 
     def excess(target_days: int) -> int:
-        config = InventoryRiskConfig(
-            target_cover_days=target_days,
-            overstock_cover_days=120,
-            high_cover_days=180,
-            critical_cover_days=365,
-            dead_stock_days=180,
-            demand_lookback_days=90,
-        )
-        service = InventoryRiskService(
-            InventoryRepository(db_session), DemandService(db_session), config
-        )
-        return service.assess(as_of=AS_OF).items[0].excess_units
+        query = InventoryRiskQuery(target_cover_days=target_days)
+        return service.assess(query, as_of=AS_OF).items[0].excess_units
 
     assert excess(60) == 340
     assert excess(30) == 370
@@ -838,7 +828,7 @@ def test_overlapping_value_thresholds_are_rejected(monkeypatch):
 
 
 def test_a_non_numeric_threshold_is_rejected(monkeypatch):
-    monkeypatch.setenv("INVENTORY_TARGET_COVER_DAYS", "soon")
+    monkeypatch.setenv("INVENTORY_DEAD_STOCK_DAYS", "soon")
 
     with pytest.raises(RuntimeError, match="whole number"):
         InventoryRiskConfig.from_env()

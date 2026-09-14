@@ -42,40 +42,22 @@ from __future__ import annotations
 import logging
 import math
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import date
-from enum import StrEnum
 
+from app.ai.schemas.inventory_query import (
+    RISK_ORDER,
+    InventoryRiskItem,
+    InventoryRiskLevel,
+    InventoryRiskQuery,
+    InventoryRiskReport,
+    InventorySort,
+)
 from app.core.time_range import today
 from app.repositories.inventory_repository import InventoryRepository, MedicineStock
 from app.services.demand_service import DemandService, DemandWindow, daily_velocity
 
 logger = logging.getLogger(__name__)
-
-
-class InventoryRiskLevel(StrEnum):
-    """How badly a medicine's capital is misallocated.
-
-    Named ``InventoryRiskLevel`` and not ``RiskLevel`` on purpose: the expiry agent
-    already owns a ``RiskLevel`` with different members, and two enums of the same
-    name meaning different things is a bug waiting for an import to be tidied up.
-    """
-
-    DEAD = "dead"
-    CRITICAL = "critical"
-    HIGH = "high"
-    MEDIUM = "medium"
-    HEALTHY = "healthy"
-
-
-#: Worst first. Ranking order, so the caller never re-derives it.
-RISK_ORDER: dict[InventoryRiskLevel, int] = {
-    InventoryRiskLevel.DEAD: 0,
-    InventoryRiskLevel.CRITICAL: 1,
-    InventoryRiskLevel.HIGH: 2,
-    InventoryRiskLevel.MEDIUM: 3,
-    InventoryRiskLevel.HEALTHY: 4,
-}
 
 
 # ---------------------------------------------------------------------------
@@ -93,10 +75,11 @@ class InventoryRiskConfig:
     in an ``if``.
     """
 
-    #: How much cover the shop *wants* to hold. Two months is a normal pharmacy
-    #: reorder cycle — long enough to absorb a supplier delay, short enough that
-    #: capital turns over. Anything above this is excess by definition.
-    target_cover_days: int = 60
+    #: NOTE: how much cover the shop *wants* to hold is NOT here. It lives on
+    #: ``InventoryRiskQuery.target_cover_days``, because it is a question a caller
+    #: asks ("what if I only held 30 days?"), not a deployment setting. The
+    #: thresholds below ARE deployment settings: they decide when an amount of cover
+    #: becomes a problem worth showing.
 
     #: Four months of cover. Twice the target: past here, stock is not a buffer any
     #: more, it is storage.
@@ -152,7 +135,6 @@ class InventoryRiskConfig:
             return value
 
         config = cls(
-            target_cover_days=read_int("INVENTORY_TARGET_COVER_DAYS", cls.target_cover_days),
             overstock_cover_days=read_int(
                 "INVENTORY_OVERSTOCK_COVER_DAYS", cls.overstock_cover_days
             ),
@@ -172,15 +154,13 @@ class InventoryRiskConfig:
         # Overlapping thresholds would make a risk level unreachable and the report
         # silently misleading, so this fails at construction rather than at runtime.
         if not (
-            config.target_cover_days
-            <= config.overstock_cover_days
+            config.overstock_cover_days
             < config.high_cover_days
             < config.critical_cover_days
         ):
             raise RuntimeError(
-                "Inventory cover thresholds must satisfy target <= overstock < high "
-                f"< critical; got {config.target_cover_days} / "
-                f"{config.overstock_cover_days} / {config.high_cover_days} / "
+                "Inventory cover thresholds must satisfy overstock < high < critical; "
+                f"got {config.overstock_cover_days} / {config.high_cover_days} / "
                 f"{config.critical_cover_days}"
             )
 
@@ -192,94 +172,6 @@ class InventoryRiskConfig:
             )
 
         return config
-
-
-# ---------------------------------------------------------------------------
-# Domain contract
-# ---------------------------------------------------------------------------
-
-
-@dataclass(frozen=True)
-class InventoryRiskItem:
-    """One medicine's inventory-risk position.
-
-    The grain is **per medicine**, not per batch. Three reasons: velocity is only
-    knowable per medicine, the decision a pharmacist takes ("stop reordering this")
-    is per medicine, and the per-batch view already exists in the expiry agent.
-
-    Frozen, so nothing downstream can quietly adjust a number after the fact.
-    """
-
-    medicine_id: int
-    medicine_name: str
-
-    #: Every unit on the shelf, expired or not. The capital view.
-    stock_quantity: int
-    #: ``stock_quantity`` valued at batch cost. Money currently tied up.
-    inventory_value: float
-    #: Units that can still be dispensed. The cover view.
-    sellable_quantity: int
-    #: ``inventory_value / stock_quantity``. Batches of one medicine can be bought at
-    #: different prices, so this is a weighted average, not any single batch's cost.
-    weighted_avg_cost: float
-
-    #: Units sold across the demand window, from ``DemandService``.
-    units_sold: int
-    #: ``units_sold / lookback_days``, the shared canonical formula.
-    daily_velocity: float
-
-    #: ``sellable_quantity / daily_velocity``. **None when nothing is selling** —
-    #: see ``_days_of_cover`` for why that is not infinity.
-    days_of_cover: float | None
-
-    #: Most recent sale, over all time. None means never sold.
-    last_sale_date: date | None
-    #: Days since that sale. None means never sold.
-    days_since_last_sale: int | None
-    #: Distinguishes "never sold" from "sold, but not lately" — different advice.
-    ever_sold: bool
-
-    #: ``daily_velocity * target_cover_days``, rounded up. What the shop should hold.
-    target_stock: int
-    #: ``max(0, sellable_quantity - target_stock)``. Units above what is needed.
-    excess_units: int
-    #: ``excess_units * weighted_avg_cost``. Money in the excess.
-    excess_value: float
-
-    #: The money this medicine is judged to be absorbing. Equals ``inventory_value``
-    #: for dead stock and ``excess_value`` otherwise — see ``_capital_at_risk``.
-    capital_at_risk: float
-
-    #: Earliest receipt date of a batch still holding stock. None when unknown.
-    oldest_receipt_date: date | None
-    #: Days since that receipt. **None when unknown**, never 0.
-    stock_age_days: int | None
-
-    risk_level: InventoryRiskLevel
-    #: Plain statements of the facts that produced ``risk_level``. Every one is
-    #: checkable against the other fields on this object.
-    risk_reasons: list[str] = field(default_factory=list)
-
-
-@dataclass(frozen=True)
-class InventoryRiskReport:
-    """The whole assessment, plus what it could not see."""
-
-    generated_for: date
-    demand_lookback_days: int
-    target_cover_days: int
-
-    medicines_reviewed: int
-    #: Medicines that exist but hold no stock. Reported, not silently dropped —
-    #: no capital is tied up in them, so they are not inventory risk.
-    medicines_without_stock: int
-
-    total_inventory_value: float
-    total_capital_at_risk: float
-
-    items: list[InventoryRiskItem]
-    counts_by_risk: dict[str, int]
-    notes: list[str]
 
 
 def _empty_counts() -> dict[str, int]:
@@ -306,13 +198,32 @@ class InventoryRiskService:
 
     # -- entry point ----------------------------------------------------
 
-    def assess(self, *, as_of: date | None = None) -> InventoryRiskReport:
-        """Produce the inventory-risk report.
+    def assess(
+        self,
+        query: InventoryRiskQuery | None = None,
+        *,
+        as_of: date | None = None,
+    ) -> InventoryRiskReport:
+        """Produce the inventory-risk report for one validated query.
 
-        No query object yet — filtering and limiting arrive with the API in the next
-        step. This step establishes the numbers.
+        The query is optional so the service stays usable — and testable — without an
+        HTTP layer above it. Omitting it means the default: every stocked medicine,
+        ranked by risk, top 10.
+
+        Order of operations matters and is deliberate:
+
+            assess every stocked medicine   -> shop-level totals and counts
+            filter                          -> what the caller asked for
+            sort                            -> how they asked for it
+            limit                           -> how much they can read
+
+        Totals and ``counts_by_risk`` are taken from the FULL set, before filtering.
+        They are shop-level KPIs: a dashboard filtered to dead stock should still be
+        able to say what the whole shop has tied up. ``items_matching_filter`` carries
+        the filtered count so the caller can say "showing 10 of 84".
         """
 
+        query = query or InventoryRiskQuery()
         reference = as_of or today()
 
         stocks = self.repository.stock_by_medicine(as_of=reference)
@@ -322,8 +233,10 @@ class InventoryRiskService:
             return InventoryRiskReport(
                 generated_for=reference,
                 demand_lookback_days=self.config.demand_lookback_days,
-                target_cover_days=self.config.target_cover_days,
+                target_cover_days=query.target_cover_days,
                 medicines_reviewed=0,
+                items_matching_filter=0,
+                capital_at_risk_in_view=0.0,
                 medicines_without_stock=total_medicines,
                 total_inventory_value=0.0,
                 total_capital_at_risk=0.0,
@@ -350,34 +263,73 @@ class InventoryRiskService:
                 ever_sold=stock.medicine_id in ever_sold,
                 received_on=receipts.get(stock.medicine_id),
                 reference=reference,
+                target_cover_days=query.target_cover_days,
             )
             for stock in stocks
         ]
 
-        items.sort(key=_ranking_key)
+        # Shop-level figures, taken before any filter narrows the view.
+        totals_value = round(sum(i.inventory_value for i in items), 2)
+        totals_at_risk = round(sum(i.capital_at_risk for i in items), 2)
+        counts = _count_by_risk(items)
+
+        matching = self._filter(items, query)
+        matching.sort(key=_sort_key(query.sort))
 
         report = InventoryRiskReport(
             generated_for=reference,
             demand_lookback_days=self.config.demand_lookback_days,
-            target_cover_days=self.config.target_cover_days,
+            target_cover_days=query.target_cover_days,
             medicines_reviewed=len(items),
             medicines_without_stock=max(0, total_medicines - len(items)),
-            total_inventory_value=round(sum(i.inventory_value for i in items), 2),
-            total_capital_at_risk=round(sum(i.capital_at_risk for i in items), 2),
-            items=items,
-            counts_by_risk=_count_by_risk(items),
-            notes=self._build_notes(stocks, items, receipts),
+            items_matching_filter=len(matching),
+            total_inventory_value=totals_value,
+            total_capital_at_risk=totals_at_risk,
+            capital_at_risk_in_view=round(sum(i.capital_at_risk for i in matching), 2),
+            items=matching[: query.limit],
+            counts_by_risk=counts,
+            notes=self._build_notes(stocks, items, receipts, query.target_cover_days),
         )
 
         logger.info(
             "inventory_risk_assessed",
             extra={
                 "medicines_reviewed": report.medicines_reviewed,
-                "target_cover_days": self.config.target_cover_days,
+                "matching": report.items_matching_filter,
+                "target_cover_days": query.target_cover_days,
+                "sort": query.sort.value,
             },
         )
 
         return report
+
+    # -- filtering ------------------------------------------------------
+
+    @staticmethod
+    def _filter(
+        items: list[InventoryRiskItem], query: InventoryRiskQuery
+    ) -> list[InventoryRiskItem]:
+        """Narrow the assessed set to what the caller asked for.
+
+        A separate pass over already-computed items rather than a WHERE clause: the
+        risk level and capital at risk are Python-side conclusions, not columns, so
+        there is nothing for SQL to filter on. The set is at most a few hundred rows.
+        """
+
+        matching = items
+
+        if query.risk_level is not None:
+            matching = [i for i in matching if i.risk_level is query.risk_level]
+
+        if query.min_capital_at_risk > 0:
+            matching = [
+                i for i in matching if i.capital_at_risk >= query.min_capital_at_risk
+            ]
+
+        if query.medicine_id is not None:
+            matching = [i for i in matching if i.medicine_id == query.medicine_id]
+
+        return list(matching)
 
     # -- one medicine ---------------------------------------------------
 
@@ -390,6 +342,7 @@ class InventoryRiskService:
         ever_sold: bool,
         received_on: date | None,
         reference: date,
+        target_cover_days: int,
     ) -> InventoryRiskItem:
         inventory_value = float(stock.inventory_value)
         weighted_avg_cost = self._weighted_avg_cost(inventory_value, stock.stock_quantity)
@@ -397,7 +350,7 @@ class InventoryRiskService:
         daily_velocity = self.demand_velocity(units_sold)
         days_of_cover = self._days_of_cover(stock.sellable_quantity, daily_velocity)
 
-        target_stock = math.ceil(daily_velocity * self.config.target_cover_days)
+        target_stock = math.ceil(daily_velocity * target_cover_days)
         excess_units = max(0, stock.sellable_quantity - target_stock)
         excess_value = round(excess_units * weighted_avg_cost, 2)
 
@@ -443,6 +396,7 @@ class InventoryRiskService:
                 days_since_last_sale=days_since_last_sale,
                 stock_age_days=stock_age_days,
                 level=level,
+                target_cover_days=target_cover_days,
             ),
         )
 
@@ -574,6 +528,7 @@ class InventoryRiskService:
         days_since_last_sale: int | None,
         stock_age_days: int | None,
         level: InventoryRiskLevel,
+        target_cover_days: int,
     ) -> list[str]:
         """Plain facts that add up to the level. No adjectives, no advice.
 
@@ -607,7 +562,7 @@ class InventoryRiskService:
 
         if excess_units > 0:
             reasons.append(
-                f"{excess_units} unit(s) above a {self.config.target_cover_days}-day "
+                f"{excess_units} unit(s) above a {target_cover_days}-day "
                 f"target, worth Rs {excess_value:,.2f}"
             )
 
@@ -626,6 +581,7 @@ class InventoryRiskService:
         stocks: list[MedicineStock],
         items: list[InventoryRiskItem],
         receipts: dict[int, date],
+        target_cover_days: int,
     ) -> list[str]:
         """What the reader needs in order to trust, or distrust, the numbers."""
 
@@ -634,7 +590,7 @@ class InventoryRiskService:
             f"{self.config.demand_lookback_days} days, projected flat. It is an "
             "estimate from history, not a forecast.",
             "Capital at risk is stock above the "
-            f"{self.config.target_cover_days}-day target, or the full value of stock "
+            f"{target_cover_days}-day target, or the full value of stock "
             "classified as dead.",
         ]
 
@@ -678,6 +634,41 @@ def _ranking_key(item: InventoryRiskItem) -> tuple:
         -item.inventory_value,
         item.medicine_id,
     )
+
+
+#: Sorts last. Larger than any real cover figure or stock age, so a medicine with
+#: no measurable rate never displaces one that has a real number.
+_UNKNOWN_LAST = float("-inf")
+
+
+def _sort_key(sort: InventorySort):
+    """Pick the ordering function for a validated sort option.
+
+    Every option ends in ``medicine_id`` so the order is total. Without it two
+    identical positions could come back either way round and a table would appear to
+    reshuffle itself between refreshes.
+
+    ``None`` is mapped to ``-inf`` under a descending sort, which puts "not known"
+    last. Treating it as zero would be a claim; treating it as infinity would rank a
+    medicine nobody can measure above every medicine somebody can.
+    """
+
+    if sort is InventorySort.CAPITAL:
+        return lambda i: (-i.capital_at_risk, -i.inventory_value, i.medicine_id)
+
+    if sort is InventorySort.COVER:
+        return lambda i: (
+            -(i.days_of_cover if i.days_of_cover is not None else _UNKNOWN_LAST),
+            i.medicine_id,
+        )
+
+    if sort is InventorySort.STOCK_AGE:
+        return lambda i: (
+            -(i.stock_age_days if i.stock_age_days is not None else _UNKNOWN_LAST),
+            i.medicine_id,
+        )
+
+    return _ranking_key
 
 
 def _count_by_risk(items: list[InventoryRiskItem]) -> dict[str, int]:
