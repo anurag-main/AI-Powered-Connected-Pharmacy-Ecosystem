@@ -236,7 +236,11 @@ not on SQLAlchemy.
 
 ## 7. Data model (ERD)
 
-Ten tables, five Alembic migrations.
+Ten tables, six Alembic migrations. The newest (`c7a1e4b90f21`, M6.1) adds no
+tables — only `sale_items.days_supply`, `medicines.default_days_supply` and four
+WhatsApp-consent columns on `customers`. Every one is nullable and nothing was
+backfilled: a NULL days supply means "duration unknown, never schedule a
+reminder", and consent cannot lawfully be inferred from a past sale.
 
 ```mermaid
 erDiagram
@@ -477,7 +481,11 @@ Base: `http://localhost:8000` · Docs: `/docs` · Health: `GET /health`
 | POST | `/api/v1/billing/sale` | One-shot: free text → finished, persisted sale |
 | POST | `/api/v1/billing/quote` | Preview a bill from free text — **writes nothing** |
 | POST | `/api/v1/billing/price-item` | Price one manually added line (FEFO + server-side price) |
-| POST | `/api/v1/billing/confirm` | Finalize a previewed bill (re-prices server-side, then persists) |
+| POST | `/api/v1/billing/confirm` | Finalize a previewed bill (re-prices server-side, then persists). **M6.1**: also takes per-line `days_supply` and `whatsapp_opt_in`, and normalises the phone |
+| GET | `/api/v1/customers` | Customers with derived WhatsApp consent state |
+| GET | `/api/v1/customers/{id}` | One customer |
+| POST | `/api/v1/customers/{id}/whatsapp/opt-in` | Record consent **now** (no client timestamp — no back-dating) |
+| POST | `/api/v1/customers/{id}/whatsapp/opt-out` | Withdraw consent, optional reason |
 | GET | `/api/v1/reorder/suggestions` | Run the reorder agent, return proposals |
 | POST | `/api/v1/reorder/approve` | Idempotently approve a proposal → `reorder_requests` |
 | POST | `/api/v1/business/analyze` | Ask the BI agent a business question |

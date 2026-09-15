@@ -1507,3 +1507,67 @@ both `purchases.js` and `medicines.js`.
 2. Rendering `error.detail` blindly → `[object Object]` on a 422.
 3. Showing a 500's `detail` to a user. A 409's detail is written by us and is
    safe; a 500's is whatever the driver raised.
+
+---
+
+## M6.1 — capturing facts, not decisions
+
+### The analogy
+
+Buying 10 tablets tells you nothing about when someone runs out. Ten sweets last
+a day if you eat ten a day, and ten days if you eat one. The shop has to write
+down **how long it should last** — nobody can work it out later from the receipt.
+
+### NULL that means something
+
+`sale_items.days_supply = NULL` is not "missing data to clean up later". It means
+**the pharmacist did not know**, and the refill engine must stay silent about
+that line. The dangerous instinct is `days_supply or 5` — that turns "we don't
+know" into a confidently-timed health message built on a number nobody supplied.
+
+Zero is rejected for the same reason: unknown must have exactly **one** spelling
+all the way down the stack, or two values that mean the same thing will behave
+differently in a date comparison.
+
+### Why consent is two timestamps
+
+A boolean cannot say *when*, and cannot tell "never asked" from "asked and
+refused". Those need different behaviour: you may ask the first person at the
+counter; you may not ask the second.
+
+```
+state = whichever of opt_in_at / opt_out_at is NEWER
+ties  -> opted_out (an unknowable consent is not consent)
+```
+
+Re-opt-in needs no extra column and no deletion. Nothing is erased, so the
+history stays auditable — which is exactly what an audit asks for.
+
+### Frozen columns, again
+
+`SaleItem.days_supply` is frozen the same way `unit_price` is. `Medicine.default_days_supply`
+is a **form hint**. If the hint changes next year, history must not move.
+
+**Lesson:** whenever a value is copied from a master record onto a transaction,
+ask whether the transaction is recording a *fact* or a *reference*. Facts get
+frozen. Prices, durations and tax codes are facts.
+
+### Two bugs my own tests caught
+
+1. `"abcdefghij"` stripped to zero digits and was silently treated as "no phone
+   given" — throwing away what the pharmacist typed, recording a walk-in, and
+   never telling them. Fixed: whitespace-only is blank, anything else with no
+   digits is an error.
+2. `compute_pricing` reads `MedicineOut` (a Pydantic schema), **not** the ORM
+   row. Adding a column to the model did not make it visible. It had to be added
+   to the schema too — and then to two hand-written `BillingLineItem(...)`
+   constructors that list every field explicitly and silently dropped the new one.
+
+**Lesson:** a field-by-field mapper is a place new fields go to die. It fails
+silently, not loudly.
+
+### 3 beginner mistakes
+1. Defaulting NULL to a "sensible" number — it launders a guess into a fact.
+2. Storing consent as a boolean — unauditable, and cannot represent re-opt-in.
+3. Coupling the capture of a fact to the channel that will use it. `days_supply`
+   must not know WhatsApp exists, or voice can never reuse it.

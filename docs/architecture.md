@@ -27,6 +27,7 @@ flowchart TB
         MW["RequestContextMiddleware<br/>request_id + access logs"]
         R1["/api/v1/medicines"]
         R9["/api/v1/purchases<br/>goods receipt — the only stock WRITE"]
+        R10["/api/v1/customers<br/>WhatsApp consent (M6.1) — records, never sends"]
         R2["/api/v1/billing"]
         R3["/api/v1/reorder"]
         R4["/api/v1/business"]
@@ -194,15 +195,16 @@ documented in full in the feature doc.
 ### Testing — [`testing.md`](testing.md)
 
 ```text
-795 passed, 7 skipped
+919 passed, 7 skipped
   unit         533
   integration  114
   evaluation    52 passed + 5 skipped — not re-run since the DemandService extraction
 ```
 
 **Frontend:** Vitest + React Testing Library + jsdom in `pharmacy-frontend`
-(`npm test`). 103 tests — 22 over the expiry page, 29 over the inventory page, 30
-over the goods receipt page, 22 over the medicines page. `fetch`
+(`npm test`). 121 tests — 22 over the expiry page, 29 over the inventory page, 30
+over the goods receipt page, 22 over the medicines page, 18 over days supply and
+consent on the billing page. `fetch`
 is the mock boundary so the API client and its error mapping stay under test. Billing
 and sales pages are not covered yet. See [`testing.md`](testing.md).
 

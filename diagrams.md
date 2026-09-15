@@ -1976,3 +1976,62 @@ graph LR
 
 Step 1 cannot be skipped: `/receive` returns **404** for a medicine that is not in
 the catalogue, so a receipt form can never invent five spellings of Crocin.
+
+---
+
+## M6.1 — Days Supply + WhatsApp Consent (facts only, no messaging)
+
+### Where days_supply enters and where it is frozen
+
+```mermaid
+graph TD
+    P["Pharmacist"] --> BT["BillTable.jsx<br/>days supply input<br/>empty = unknown"]
+    BT --> API["lib/api/billing.js<br/>toDaysSupply()<br/>'' -> null, not 0"]
+    API --> R["POST /api/v1/billing/confirm"]
+    R --> SC["ConfirmLineItem<br/>ge=1 le=365"]
+    SC --> SV["BillingService"]
+    SV --> CP["compute_pricing<br/>spreads **item"]
+    CP --> PS["persist_sale<br/>with db.begin()"]:::tx
+    PS --> DB[("sale_items.days_supply<br/>FROZEN like unit_price")]
+    MD[("medicines.default_days_supply<br/>a FORM HINT only")]:::hint -.->|"pre-fills"| BT
+    MD -.->|"never read when<br/>interpreting a past sale"| DB
+
+    classDef tx fill:#d6ffd9,stroke:#0a0,stroke-width:3px,color:#000
+    classDef hint fill:#fff4cc,stroke:#c90,stroke-width:2px,color:#000
+```
+
+### Consent as two timestamps, not a boolean
+
+```mermaid
+stateDiagram-v2
+    [*] --> not_set: customer created
+    not_set --> opted_in: opt-in (counter or staff)
+    not_set --> opted_out: "never message me"
+    opted_in --> opted_out: opt-out (reason recorded)
+    opted_out --> opted_in: explicit NEW opt-in
+    note right of opted_out
+        opt_in_at is NEVER cleared.
+        State = whichever timestamp is newer.
+        Ties favour opted_out.
+    end note
+```
+
+`not_set` and `opted_out` must stay distinct: the first may still be asked at the
+counter, the second may not. A boolean cannot express that.
+
+### The boundary M6.1 protects
+
+```mermaid
+graph TD
+    B["Billing captures FACTS<br/>days_supply · consent"]:::now --> D[("MySQL")]
+    D --> RD["Refill Domain<br/>M6.2 — does not exist"]:::future
+    RD --> CL["Communication Layer<br/>M6.3"]:::future
+    CL --> W["WhatsApp"]:::future
+    CL --> V["Marathi Voice<br/>M7"]:::future
+
+    classDef now fill:#d6ffd9,stroke:#0a0,stroke-width:3px,color:#000
+    classDef future fill:#f0f0f0,stroke:#888,stroke-dasharray:4,color:#000
+```
+
+Nothing in M6.1 imports a WhatsApp client, holds a credential, or knows a
+template exists. `days_supply` is never coupled to a channel.
