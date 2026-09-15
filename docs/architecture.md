@@ -18,9 +18,9 @@ flowchart TB
     USER([Pharmacy user])
 
     subgraph FE["Next.js frontend — pharmacy-frontend/ (Pages Router)"]
-        PG["pages/ — index, medicines, receive, reorder, sales, expiry, inventory"]
-        CMP["src/components/ — ui, billing, expiry, inventory, receive, medicines"]
-        APIC["src/lib/api/ — client, index, billing, sales, expiry, inventory, purchases, medicines"]
+        PG["pages/ — index, medicines, receive, refills, reorder, sales, expiry, inventory"]
+        CMP["src/components/ — ui, billing, expiry, inventory, receive, medicines, refill"]
+        APIC["src/lib/api/ — client, index, billing, sales, expiry, inventory, purchases, medicines, refill"]
     end
 
     subgraph API["FastAPI — app/main.py"]
@@ -28,6 +28,7 @@ flowchart TB
         R1["/api/v1/medicines"]
         R9["/api/v1/purchases<br/>goods receipt — the only stock WRITE"]
         R10["/api/v1/customers<br/>WhatsApp consent (M6.1) — records, never sends"]
+        R11["/api/v1/refill/candidates<br/>refill engine (M6.2) — decides WHO, contacts nobody"]
         R2["/api/v1/billing"]
         R3["/api/v1/reorder"]
         R4["/api/v1/business"]
@@ -195,16 +196,16 @@ documented in full in the feature doc.
 ### Testing — [`testing.md`](testing.md)
 
 ```text
-919 passed, 7 skipped
+971 passed, 7 skipped
   unit         533
   integration  114
   evaluation    52 passed + 5 skipped — not re-run since the DemandService extraction
 ```
 
 **Frontend:** Vitest + React Testing Library + jsdom in `pharmacy-frontend`
-(`npm test`). 121 tests — 22 over the expiry page, 29 over the inventory page, 30
+(`npm test`). 140 tests — 22 over the expiry page, 29 over the inventory page, 30
 over the goods receipt page, 22 over the medicines page, 18 over days supply and
-consent on the billing page. `fetch`
+consent on the billing page, 19 over the refills page. `fetch`
 is the mock boundary so the API client and its error mapping stay under test. Billing
 and sales pages are not covered yet. See [`testing.md`](testing.md).
 

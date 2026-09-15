@@ -1571,3 +1571,98 @@ silently, not loudly.
 2. Storing consent as a boolean — unauditable, and cannot represent re-opt-in.
 3. Coupling the capture of a fact to the channel that will use it. `days_supply`
    must not know WhatsApp exists, or voice can never reuse it.
+
+---
+
+## M6.2 — deciding who is due, without sending anything
+
+### The analogy
+
+You lend a friend 10 sweets and they eat 2 a day. You write down "these last 5
+days". On day 5 you check: did they come back for more? If yes, nothing to do. If
+no, they have run out — that is the moment to say something.
+
+The subtle bit: if they came back on day 3 and took 10 more, they do **not** run
+out on day 8. They still had 2 days left, so the new batch starts on day 5 and
+runs to day 10.
+
+### Shift-forward — the rule worth remembering
+
+    coverage_end = max(purchase_date, previous_coverage_end) + days_supply
+
+This is the real pharmacy measure (Proportion of Days Covered), not something I
+invented. Two wrong alternatives:
+
+| Approach | Sept 1 (+5), Sept 3 (+5) | Problem |
+|---|---|---|
+| latest purchase + days | Sept 8 | reminds someone holding 3 days of medicine |
+| sum everything from first | Sept 11 | right here by luck, breaks if there is a gap |
+| **shift-forward** | **Sept 11** | correct in both shapes |
+
+**Bonus:** it answers "have they already refilled?" with no special case. Buying
+again pushes coverage into the future, so they are simply not due. I did not need
+an ALREADY_REFILLED state — which is good, because a second state that must
+behave identically to NOT_DUE everywhere will eventually stop doing so.
+
+**Lesson:** when a special case appears, check whether a better model makes it
+disappear.
+
+### Derive, don't store
+
+I chose NOT to create a `refill_schedules` table. The tempting design is to write
+a schedule row when the sale happens. But:
+
+* the moment the customer buys again, that row is **wrong**
+* so every sale would need to invalidate schedules — a second write path
+* and now two things claim to know the truth
+
+Sales already are the truth. Deriving on read means **the rules can change and
+history stays correct**, because history is just the sales.
+
+And idempotency comes free: **a pure query has nothing to duplicate.** No
+INSERT, no dedup logic, no "did I already do this" flag. Run it a thousand times.
+
+**Lesson:** before adding a table, ask what happens when the underlying fact
+changes. If the stored row would become a lie, you wanted a query.
+
+### Idempotency key, defined before it is needed
+
+    refill:{source_sale_item_id}:{expected_refill_date}
+
+Nothing uses it yet. It is defined now so M6.3's notifications table can put a
+UNIQUE constraint on it — letting **the database** prevent double-sends instead
+of careful scheduler code. Careful code fails at 3am; a UNIQUE constraint does
+not.
+
+Keyed on the sale ITEM, not (customer, medicine, date): if someone corrects a
+sale's days_supply, the date moves and it correctly becomes a *different*
+opportunity rather than reusing the old one's "already sent" record.
+
+### Two axes, never merged
+
+    status         NOT_DUE | DUE | UNKNOWN_DURATION
+    contactability CONTACTABLE | NO_PHONE | NOT_OPTED_IN | OPTED_OUT
+
+Merging gives DUE_BUT_OPTED_OUT, DUE_BUT_NO_PHONE... a state explosion. Worse, it
+lets a **consent problem delete a business opportunity**. A customer who is due
+but never opted in is still someone the pharmacist can phone.
+
+**Lesson:** if two facts can vary independently, they are two fields. Multiplying
+them into one enum is how state machines get out of control.
+
+### Why no AI here
+
+There is nothing to plan, no tool to choose, no ambiguity. It is date arithmetic.
+An LLM would be slower, cost money, and be **non-deterministic** — and a
+non-deterministic answer about somebody's medicine is a defect.
+
+The project has agents. That is not a reason for this to be one.
+
+### 3 beginner mistakes
+1. Storing a computed decision that goes stale, instead of computing it. The
+   stored row does not announce that it is wrong.
+2. Building idempotency out of application logic when a UNIQUE constraint would
+   do it. Locks and flags fail; constraints do not.
+3. Letting the domain know its delivery channel. The instant `RefillCandidate`
+   grows a `whatsapp_template` field, the voice agent can no longer reuse it —
+   and nothing will fail loudly to tell you.

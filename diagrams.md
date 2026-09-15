@@ -2035,3 +2035,91 @@ graph TD
 
 Nothing in M6.1 imports a WhatsApp client, holds a credential, or knows a
 template exists. `days_supply` is never coupled to a channel.
+
+---
+
+## M6.2 — Refill Intelligence (decides WHO, contacts nobody)
+
+### The layered architecture the whole of M6 depends on
+
+```mermaid
+graph TD
+    S["Sales<br/>SaleItem.days_supply"] --> RI["Refill Intelligence<br/>RefillService"]:::now
+    RI --> EL["Eligibility<br/>status + contactability"]:::now
+    EL --> RO["Refill Opportunity<br/>RefillCandidate"]:::now
+    RO -.-> CL["Communication Layer<br/>M6.3"]:::future
+    CL -.-> W["WhatsApp"]:::future
+    CL -.-> V["Marathi Voice · M7"]:::future
+
+    classDef now fill:#d6ffd9,stroke:#0a0,stroke-width:3px,color:#000
+    classDef future fill:#f0f0f0,stroke:#888,stroke-dasharray:4,color:#000
+```
+
+The refill domain never learns which wire carries the answer. That is what lets
+voice reuse all of it later.
+
+### Shift-forward coverage — why "latest purchase + days" is wrong
+
+```mermaid
+gantt
+    title Two 5-day supplies bought 2 days apart
+    dateFormat YYYY-MM-DD
+    axisFormat %b %d
+    section Naive (wrong)
+    1st supply Sep 1-6      :done, a1, 2026-09-01, 5d
+    2nd restarts Sep 3      :crit, a2, 2026-09-03, 5d
+    section Shift-forward
+    1st supply Sep 1-6      :done, b1, 2026-09-01, 5d
+    2nd starts when 1st ends :active, b2, 2026-09-06, 5d
+```
+
+Naive says the customer runs out on **Sept 8** and reminds someone who still has
+three days of medicine in the drawer. Shift-forward says **Sept 11**.
+
+    coverage_end = max(purchase_date, previous_coverage_end) + days_supply
+
+This also answers "already refilled" with no special case: buying again simply
+pushes coverage into the future, so the customer is NOT_DUE.
+
+### The decision, per (customer, medicine)
+
+```mermaid
+graph TD
+    P["purchases for one<br/>(customer, medicine)"] --> L{"latest purchase has<br/>days_supply?"}
+    L -->|"no"| U["UNKNOWN_DURATION<br/>no date, never a candidate"]:::grey
+    L -->|"yes"| C["compute_coverage<br/>shift-forward"]
+    C --> D{"coverage_end<br/>> today?"}
+    D -->|"yes"| N["NOT_DUE<br/>(reason says 'already refilled'<br/>when they bought again)"]:::ok
+    D -->|"no"| O{"overdue ><br/>MAX_DAYS_OVERDUE?"}
+    O -->|"yes"| N2["NOT_DUE<br/>too long past to be a reminder"]:::ok
+    O -->|"no"| DUE["DUE + days_overdue"]:::due
+
+    DUE --> CT["contactability<br/>SEPARATE axis"]:::axis
+    CT --> CO["CONTACTABLE / NO_PHONE /<br/>NOT_OPTED_IN / OPTED_OUT"]:::axis
+
+    classDef grey fill:#f0f0f0,stroke:#888,stroke-width:2px,color:#000
+    classDef ok fill:#d6ffd9,stroke:#0a0,stroke-width:2px,color:#000
+    classDef due fill:#fff4cc,stroke:#c90,stroke-width:3px,color:#000
+    classDef axis fill:#e0e7ff,stroke:#44c,stroke-width:2px,color:#000
+```
+
+Status and contactability are **orthogonal**. A consent gap must never delete the
+business opportunity — a due customer who never opted in can still be phoned.
+
+### Internal round trip
+
+```mermaid
+graph LR
+    R["routers/refill.py"] --> S["RefillService<br/>find_candidates()"]
+    S --> Q["RefillRepository<br/>purchases_for_refill()"]
+    Q --> DB[("MySQL<br/>sales + sale_items<br/>customer_id NOT NULL")]
+    DB --> S
+    S --> E["compute_coverage<br/>+ assess_contactability<br/>+ _decide"]
+    E --> RC["RefillCandidate[]<br/>+ summary + notes"]:::out
+    RC --> UI["pages/refills.jsx"]
+
+    classDef out fill:#d6ffd9,stroke:#0a0,stroke-width:3px,color:#000
+```
+
+No table was added. Candidates are derived, so a scan writes nothing and running
+it twice is free — idempotency by construction rather than by careful code.

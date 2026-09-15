@@ -486,6 +486,7 @@ Base: `http://localhost:8000` · Docs: `/docs` · Health: `GET /health`
 | GET | `/api/v1/customers/{id}` | One customer |
 | POST | `/api/v1/customers/{id}/whatsapp/opt-in` | Record consent **now** (no client timestamp — no back-dating) |
 | POST | `/api/v1/customers/{id}/whatsapp/opt-out` | Withdraw consent, optional reason |
+| GET | `/api/v1/refill/candidates` | **M6.2** — who is due for a refill, with the reason. Deterministic, derived from sales, contacts nobody |
 | GET | `/api/v1/reorder/suggestions` | Run the reorder agent, return proposals |
 | POST | `/api/v1/reorder/approve` | Idempotently approve a proposal → `reorder_requests` |
 | POST | `/api/v1/business/analyze` | Ask the BI agent a business question |

@@ -53,7 +53,7 @@ docs/
 | **Inventory Risk** | Documented to the standard, backend **and** frontend | [`agents/inventory_risk_agent.md`](agents/inventory_risk_agent.md), [`features/inventory_risk.md`](features/inventory_risk.md) |
 | **Goods Receipt** | Documented to the standard, backend **and** frontend. The only write path for stock | [`features/goods_receipt.md`](features/goods_receipt.md) |
 | **Medicine Catalogue** | Documented to the standard. Add form over the existing endpoint; names and prices, never stock | [`features/medicine_catalogue.md`](features/medicine_catalogue.md) |
-| **Refill Intelligence (M6.1)** | Days supply + WhatsApp consent captured at the counter. **No refill engine, no messaging** — facts only | [`features/refill_intelligence.md`](features/refill_intelligence.md) |
+| **Refill Intelligence (M6.1 + M6.2)** | M6.1 captures days supply + consent; M6.2 is the deterministic engine that decides who is due and why. **Still no messaging** | [`features/refill_intelligence.md`](features/refill_intelligence.md) |
 
 ## Features
 

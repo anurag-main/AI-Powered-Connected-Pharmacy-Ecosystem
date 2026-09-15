@@ -310,7 +310,8 @@ tests/
 ├── inventory-page.test.jsx    29 tests over pages/inventory.jsx
 ├── receive-page.test.jsx      30 tests over pages/receive.jsx
 ├── medicines-page.test.jsx    22 tests over pages/medicines.jsx
-└── billing-days-supply.test.jsx  18 tests over days supply + consent
+├── billing-days-supply.test.jsx  18 tests over days supply + consent
+└── refills-page.test.jsx      19 tests over pages/refills.jsx
 ```
 
 **Stack:** Vitest 5 + React Testing Library 16 + jsdom. `vitest.config.mjs` sets the
