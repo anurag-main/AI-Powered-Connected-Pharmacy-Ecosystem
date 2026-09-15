@@ -14,7 +14,7 @@ const rupee = (n) => `₹${Number(n).toFixed(2)}`;
  * Line totals + grand total are computed live (quantity × unit_price) so edits
  * reflect instantly; the server recomputes authoritatively on confirm.
  */
-export default function BillTable({ items = [], onQtyChange, onRemove }) {
+export default function BillTable({ items = [], onQtyChange, onDaysSupplyChange, onRemove }) {
     const grandTotal = items.reduce((sum, it) => sum + it.quantity * it.unit_price, 0);
 
     if (items.length === 0) {
@@ -36,6 +36,9 @@ export default function BillTable({ items = [], onQtyChange, onRemove }) {
                             <th className="text-left font-semibold px-4 py-3">Batch / Expiry</th>
                             <th className="text-right font-semibold px-4 py-3">Price</th>
                             <th className="text-center font-semibold px-4 py-3 w-28">Qty</th>
+                            <th className="text-center font-semibold px-4 py-3 w-32">
+                                Days supply
+                            </th>
                             <th className="text-right font-semibold px-4 py-3">Line Total</th>
                             <th className="px-4 py-3 w-12"></th>
                         </tr>
@@ -61,6 +64,26 @@ export default function BillTable({ items = [], onQtyChange, onRemove }) {
                                         className="h-8 text-center"
                                     />
                                 </td>
+                                <td className="px-4 py-3">
+                                    {/*
+                                      M6.1 -- how many days this line is expected to
+                                      last. Empty is a REAL answer meaning "unknown",
+                                      and the placeholder says so rather than showing
+                                      a 0 that would read as a number the pharmacist
+                                      chose. Pre-filled from the medicine's catalogue
+                                      default when there is one; always overridable.
+                                    */}
+                                    <Input
+                                        type="number"
+                                        min={1}
+                                        max={365}
+                                        value={it.days_supply ?? ""}
+                                        placeholder="unknown"
+                                        aria-label={`Days supply for ${it.name}`}
+                                        onChange={(e) => onDaysSupplyChange(it._id, e.target.value)}
+                                        className="h-8 text-center"
+                                    />
+                                </td>
                                 <td className="px-4 py-3 text-right font-semibold tabular-nums">
                                     {rupee(it.quantity * it.unit_price)}
                                 </td>
@@ -81,7 +104,7 @@ export default function BillTable({ items = [], onQtyChange, onRemove }) {
                     </tbody>
                     <tfoot>
                         <tr className="bg-muted/30">
-                            <td colSpan={4} className="px-4 py-4 text-right font-semibold text-foreground">Total</td>
+                            <td colSpan={5} className="px-4 py-4 text-right font-semibold text-foreground">Total</td>
                             <td className="px-4 py-4 text-right text-lg font-bold text-primary tabular-nums">{rupee(grandTotal)}</td>
                             <td></td>
                         </tr>

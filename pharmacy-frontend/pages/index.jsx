@@ -32,6 +32,10 @@ function NewBillPage() {
     const [items, setItems] = useState([]);
     const [customerName, setCustomerName] = useState("");
     const [customerPhone, setCustomerPhone] = useState("");
+    // M6.1 -- explicit WhatsApp consent. Starts false on every bill and is
+    // never remembered between customers: consent belongs to a person, and a
+    // sticky checkbox would silently opt in the next person in the queue.
+    const [whatsappOptIn, setWhatsappOptIn] = useState(false);
     const [confirming, setConfirming] = useState(false);
     const [confirmedSale, setConfirmedSale] = useState(null);
     const [banner, setBanner] = useState(null); // { kind: "error" | "success", text }
@@ -79,7 +83,17 @@ function NewBillPage() {
                         : it
                 );
             }
-            return [...prev, { ...line, _id: nextId.current++ }];
+            // M6.1 -- seed the days-supply box from the catalogue hint the
+            // server sent. `?? null` keeps "no default" as an empty box rather
+            // than undefined, so the input stays controlled from the first render.
+            return [
+                ...prev,
+                {
+                    ...line,
+                    days_supply: line.default_days_supply ?? null,
+                    _id: nextId.current++,
+                },
+            ];
         });
 
         setSelected(null);
@@ -91,6 +105,15 @@ function NewBillPage() {
     const handleQtyChange = (id, qty) =>
         !confirmedSale &&
         setItems((prev) => prev.map((it) => (it._id === id ? { ...it, quantity: qty } : it)));
+
+    // M6.1. Stores the RAW input string so the box can be emptied while typing;
+    // the API client turns "" into an explicit null at send time. Clamping here
+    // instead would fight the pharmacist mid-keystroke.
+    const handleDaysSupplyChange = (id, value) =>
+        !confirmedSale &&
+        setItems((prev) =>
+            prev.map((it) => (it._id === id ? { ...it, days_supply: value } : it))
+        );
 
     const handleRemove = (id) =>
         !confirmedSale && setItems((prev) => prev.filter((it) => it._id !== id));
@@ -105,7 +128,7 @@ function NewBillPage() {
         setConfirming(true);
         setBanner(null);
 
-        const result = await confirmSale(items, customerName, customerPhone);
+        const result = await confirmSale(items, customerName, customerPhone, whatsappOptIn);
 
         setConfirming(false);
 
@@ -263,7 +286,12 @@ function NewBillPage() {
             </Card>
 
             <div className="no-print">
-                <BillTable items={items} onQtyChange={handleQtyChange} onRemove={handleRemove} />
+                <BillTable
+                    items={items}
+                    onQtyChange={handleQtyChange}
+                    onDaysSupplyChange={handleDaysSupplyChange}
+                    onRemove={handleRemove}
+                />
             </div>
 
             {items.length > 0 && (
@@ -289,6 +317,38 @@ function NewBillPage() {
                                 />
                             </div>
                         </div>
+
+                        {/*
+                          M6.1 -- WhatsApp consent, captured at the one moment the
+                          customer is actually standing there. Disabled without a
+                          phone number because there would be nothing to attach the
+                          consent to: no phone means no customer row is created.
+
+                          The wording states the purpose, which is what the DPDP
+                          Act means by informed -- consent to "updates" would not
+                          cover refill reminders.
+                        */}
+                        <label
+                            className={`flex items-start gap-2.5 text-sm ${
+                                customerPhone.trim() ? "text-foreground" : "text-muted-foreground"
+                            }`}
+                        >
+                            <input
+                                type="checkbox"
+                                checked={whatsappOptIn}
+                                disabled={!customerPhone.trim() || Boolean(confirmedSale)}
+                                onChange={(e) => setWhatsappOptIn(e.target.checked)}
+                                className="mt-0.5 h-4 w-4 rounded border-input accent-primary disabled:opacity-50"
+                            />
+                            <span>
+                                Customer agreed to WhatsApp refill reminders
+                                {!customerPhone.trim() && (
+                                    <span className="block text-xs">
+                                        Enter a phone number to enable this.
+                                    </span>
+                                )}
+                            </span>
+                        </label>
 
                         <div className="flex flex-wrap gap-3">
                             <Button
