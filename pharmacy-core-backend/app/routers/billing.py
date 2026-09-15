@@ -136,6 +136,7 @@ def confirm_sale(
         items=payload.items,
         customer_name=payload.customer_name,
         customer_phone=payload.customer_phone,
+        whatsapp_opt_in=payload.whatsapp_opt_in,
     )
 
     if result.sale_id is None:

@@ -10,7 +10,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING
 
-from sqlalchemy import DateTime, Numeric, String, func
+from sqlalchemy import CheckConstraint, DateTime, Numeric, String, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
@@ -57,6 +57,17 @@ class Medicine(Base):
     # Optional. `Mapped[str | None]` + `nullable=True` is the 2.0 idiom.
     manufacturer: Mapped[str | None] = mapped_column(String(200), nullable=True)
 
+    # A typical dispense duration for this medicine, in days (M6.1).
+    #
+    # This is a UI PRE-FILL HINT and nothing else. It is never read when
+    # interpreting a past sale -- SaleItem.days_supply is the authoritative
+    # record of what was dispensed. Keeping the hint here and the fact there is
+    # what makes history immune to someone editing this value later.
+    #
+    # NULL means "no typical duration", which is the honest answer for most of
+    # the catalogue: a painkiller bought as-needed has no natural course length.
+    default_days_supply: Mapped[int | None] = mapped_column(nullable=True)
+
     # Server-stamped audit timestamps.
     # server_default=func.now() means MySQL fills it in, not Python — survives clock skew.
     # onupdate=func.now() on updated_at means MySQL updates it whenever the row changes.
@@ -80,6 +91,14 @@ class Medicine(Base):
     batches: Mapped[list["Batch"]] = relationship(
         back_populates="medicine",
         cascade="all",
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "default_days_supply IS NULL "
+            "OR (default_days_supply >= 1 AND default_days_supply <= 365)",
+            name="ck_medicines_default_days_supply_range",
+        ),
     )
 
     def __repr__(self) -> str:

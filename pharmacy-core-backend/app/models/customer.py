@@ -40,6 +40,48 @@ class Customer(Base):
         index=True,
     )
 
+    # ---------------- WhatsApp consent (M6.1) ----------------
+    #
+    # Consent is stored as two TIMESTAMPS rather than one boolean, and the state
+    # is derived by comparing them. A boolean cannot answer "when did they agree"
+    # or "did they opt back in after opting out", and under India's DPDP Act the
+    # pharmacy has to be able to show WHEN consent was given for WHAT.
+    #
+    # Derived state (see CustomerService.consent_state):
+    #   both NULL                         -> not_set     (never asked)
+    #   opt_in newer than opt_out         -> opted_in
+    #   opt_out newer than or equal opt_in-> opted_out
+    #
+    # Re-opt-in therefore needs no extra column and no row deletion: a newer
+    # opt_in timestamp simply wins. Nothing is ever erased, so the history of
+    # who agreed and who withdrew stays auditable.
+    whatsapp_opt_in_at: Mapped[datetime | None] = mapped_column(
+        DateTime, nullable=True
+    )
+    whatsapp_opt_out_at: Mapped[datetime | None] = mapped_column(
+        DateTime, nullable=True
+    )
+
+    # Free text, optional -- "asked to stop", "wrong number", or whatever the
+    # customer actually said. Not an enum: the point of this column is to record
+    # a human reason we did not anticipate, and an enum would force the pharmacy
+    # to file every complaint under "other".
+    whatsapp_opt_out_reason: Mapped[str | None] = mapped_column(
+        String(200), nullable=True
+    )
+
+    # WHERE the consent was captured -- "billing_counter", "staff", "import".
+    # Kept because DPDP consent must be demonstrably informed, and "we have a
+    # timestamp" is a weaker answer than "it was taken at the counter".
+    #
+    # There is deliberately NO consent_version column yet. Versioning records
+    # WHICH wording someone agreed to, and in M6.1 no wording exists: nothing is
+    # sent, and no message template has been written or approved. A version
+    # column now would store a fiction. It lands in M6.3 with the real template.
+    whatsapp_consent_source: Mapped[str | None] = mapped_column(
+        String(30), nullable=True
+    )
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime,
         nullable=False,

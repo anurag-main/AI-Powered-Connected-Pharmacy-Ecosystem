@@ -12,6 +12,7 @@ from app.core.middleware import RequestContextMiddleware
 from app.core.tracing import log_tracing_status
 from app.routers import billing as billing_router
 from app.routers import business as business_router
+from app.routers import customers as customers_router
 from app.routers import expiry as expiry_router
 from app.routers import inventory as inventory_router
 from app.routers import medicines as medicines_router
@@ -86,6 +87,7 @@ def health_check():
 # ------------------------------------------------------------------------
 
 app.include_router(medicines_router.router)
+app.include_router(customers_router.router)
 app.include_router(purchases_router.router)
 app.include_router(billing_router.router)
 app.include_router(reorder_router.router)

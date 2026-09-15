@@ -48,6 +48,10 @@ def _state_to_response(final_state: dict) -> BillingResponse:
             needs_confirm=item.get("needs_confirm", False),
             matched_from=item.get("matched_from"),
             candidates=item.get("candidates", []),
+            # M6.1 -- the catalogue hint that pre-fills the billing form's
+            # days-supply box. `.get()` because the quote path may build items
+            # that never went through compute_pricing.
+            default_days_supply=item.get("default_days_supply"),
         )
         for item in priced_items
     ]
@@ -117,6 +121,9 @@ class BillingService:
             expiry_date=it["expiry_date"],
             unit_price=it["unit_price"],
             line_total=it["line_total"],
+            # M6.1 -- this is the endpoint the billing form calls when adding a
+            # line, so it is the one that has to carry the pre-fill hint.
+            default_days_supply=it.get("default_days_supply"),
         )
 
     def confirm_sale(
@@ -124,6 +131,7 @@ class BillingService:
         items: list[ConfirmLineItem],
         customer_name: str | None,
         customer_phone: str | None,
+        whatsapp_opt_in: bool = False,
     ) -> BillingResponse:
         """FINALIZE — persist the owner-reviewed items. No LLM.
 
@@ -141,6 +149,9 @@ class BillingService:
                 "batch_id": it.batch_id,
                 "batch_number": it.batch_number,
                 "expiry_date": it.expiry_date,
+                # M6.1. Rides through compute_pricing untouched (it spreads
+                # **item) and is frozen onto the sale line by persist_sale.
+                "days_supply": it.days_supply,
             }
             for it in items
         ]
@@ -149,6 +160,7 @@ class BillingService:
             "extracted_intent": {
                 "customer_name": customer_name,
                 "customer_phone": customer_phone,
+                "whatsapp_opt_in": whatsapp_opt_in,
             },
         }
         final_state = get_confirm_graph().invoke(initial_state)

@@ -8,7 +8,15 @@ The graph's internal state (BillingState) is NOT exposed directly — these sche
 are the clean public face. Internal fields (batch_id, medicine_id) are included
 because they're useful to the pharmacist UI, but cost_price etc. never appear.
 """
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+from app.core.phone import InvalidPhoneNumberError, normalize_indian_mobile
+
+# Shared bounds for days supply. 1..365 matches the CHECK constraint on both
+# sale_items.days_supply and medicines.default_days_supply -- Pydantic gives the
+# friendly 422, the database is the backstop that also catches direct SQL.
+DAYS_SUPPLY_MIN = 1
+DAYS_SUPPLY_MAX = 365
 
 
 class BillingRequest(BaseModel):
@@ -45,6 +53,13 @@ class BillingLineItem(BaseModel):
     expiry_date: str
     unit_price: float
     line_total: float
+
+    # M6.1 -- the medicine's typical course length, so the billing UI can
+    # pre-fill the days-supply box. A HINT for the form only: whatever the
+    # pharmacist finally confirms is what gets written to the sale line.
+    # None means the catalogue has no typical duration for this medicine, which
+    # is the honest answer for anything taken as-needed.
+    default_days_supply: int | None = None
 
     # ----- Voice-match metadata (defaults keep older callers working) -----
     # True when the match was uncertain and the owner should confirm before billing.
@@ -97,6 +112,17 @@ class ConfirmLineItem(BaseModel):
     batch_number: str
     expiry_date: str
 
+    # M6.1 -- how many days this line is expected to last.
+    #
+    # Optional, and omitting it is a real answer, not a lazy one: it records
+    # "the pharmacist does not know", and the future refill engine must skip
+    # that line rather than invent a duration. `ge=1` means a client cannot send
+    # 0 to mean unknown -- zero days of supply is not a thing, and allowing it
+    # would give us two spellings of unknown that behave differently downstream.
+    days_supply: int | None = Field(
+        default=None, ge=DAYS_SUPPLY_MIN, le=DAYS_SUPPLY_MAX
+    )
+
 
 class PriceItemRequest(BaseModel):
     """Price ONE medicine by id (used when the owner picks a different candidate
@@ -118,3 +144,29 @@ class ConfirmSaleRequest(BaseModel):
     items: list[ConfirmLineItem] = Field(..., min_length=1)
     customer_name: str | None = Field(default=None)
     customer_phone: str | None = Field(default=None)
+
+    # M6.1 -- explicit WhatsApp opt-in, captured at the counter.
+    #
+    # Defaults to False, and that default is the whole point: consent is never
+    # implied by a customer handing over a phone number. Under the DPDP Act the
+    # number is given for the sale, and reusing it to message them is a separate
+    # purpose needing its own affirmative act.
+    #
+    # Only meaningful alongside a phone number; ignored otherwise, since there is
+    # no customer row to attach it to.
+    whatsapp_opt_in: bool = Field(default=False)
+
+    @field_validator("customer_phone")
+    @classmethod
+    def _normalize_phone(cls, value: str | None) -> str | None:
+        """Canonicalise the phone, or reject it -- see app/core/phone.py.
+
+        Done here so every caller of /confirm gets the same treatment and the
+        UNIQUE index on customers.phone sees one spelling per human. A bad number
+        fails with 422 rather than being stored: the field is optional, so the
+        pharmacist can simply clear it and save the sale.
+        """
+        try:
+            return normalize_indian_mobile(value)
+        except InvalidPhoneNumberError as e:
+            raise ValueError(str(e)) from e

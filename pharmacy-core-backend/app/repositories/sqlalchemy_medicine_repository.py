@@ -31,6 +31,7 @@ class SQLAlchemyMedicineRepository:
         mrp: float,
         hsn_code: str,
         manufacturer: str | None,
+        default_days_supply: int | None = None,
     ) -> MedicineOut:
         """Insert one row. MySQL generates id, created_at, updated_at."""
         medicine = Medicine(
@@ -39,6 +40,7 @@ class SQLAlchemyMedicineRepository:
             mrp=mrp,
             hsn_code=hsn_code,
             manufacturer=manufacturer,
+            default_days_supply=default_days_supply,
         )
         self._db.add(medicine)
         self._db.commit()

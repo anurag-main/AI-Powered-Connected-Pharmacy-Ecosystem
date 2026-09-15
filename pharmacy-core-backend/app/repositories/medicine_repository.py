@@ -42,6 +42,7 @@ class InMemoryMedicineRepository:
         mrp: float,
         hsn_code: str,
         manufacturer: str | None,
+        default_days_supply: int | None = None,
     ) -> MedicineOut:
         """Insert a new medicine. Generates id and created_at server-side."""
         # Capture the current counter BEFORE incrementing — this is the id we'll hand out.
@@ -53,6 +54,7 @@ class InMemoryMedicineRepository:
             mrp=mrp,
             hsn_code=hsn_code,
             manufacturer=manufacturer,
+            default_days_supply=default_days_supply,
             created_at=datetime.now(),
         )
 

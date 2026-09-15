@@ -12,7 +12,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING
 
-from sqlalchemy import DateTime, ForeignKey, Index, Numeric, func
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, Numeric, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
@@ -60,6 +60,20 @@ class SaleItem(Base):
     # huge stability win.
     line_total: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
 
+    # How many DAYS this dispensed quantity is expected to last (M6.1).
+    #
+    # NULLABLE, and the NULL is load-bearing: it means "duration unknown", and
+    # the future refill engine must therefore NOT schedule a reminder for this
+    # line. It does NOT mean zero and must never be defaulted to one -- guessing
+    # a duration would produce a confidently-timed health-adjacent message built
+    # on a number nobody supplied.
+    #
+    # Stored per LINE, not derived from Medicine.default_days_supply at read
+    # time, for the same reason unit_price is frozen here: this is what was
+    # actually dispensed. If the medicine's default changes next year, this row
+    # must still read 5.
+    days_supply: Mapped[int | None] = mapped_column(nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime,
         nullable=False,
@@ -72,6 +86,13 @@ class SaleItem(Base):
     __table_args__ = (
         Index("ix_sale_items_sale_id", "sale_id"),
         Index("ix_sale_items_medicine_id", "medicine_id"),
+        # DB-level guard. The upper bound is deliberate: a year is already an
+        # implausible single dispense, and it stops a fat-fingered 3650 from
+        # parking a reminder a decade out. NULL passes -- unknown is legal.
+        CheckConstraint(
+            "days_supply IS NULL OR (days_supply >= 1 AND days_supply <= 365)",
+            name="ck_sale_items_days_supply_range",
+        ),
     )
 
     sale: Mapped["Sale"] = relationship(back_populates="items")

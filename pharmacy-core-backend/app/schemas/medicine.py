@@ -25,6 +25,15 @@ class MedicineCreate(BaseModel):
     hsn_code: str = Field(..., min_length=8, max_length=8)
     manufacturer: str | None = Field(default=None, max_length=200)
 
+    # M6.1 -- a typical course length in days, used ONLY to pre-fill the billing
+    # form. Optional, and None is the honest answer for most of the catalogue:
+    # a painkiller bought as needed has no natural course length.
+    #
+    # Range matches the CHECK constraint on the column and the bounds on
+    # SaleItem.days_supply, so the hint can never suggest a value the sale line
+    # would refuse.
+    default_days_supply: int | None = Field(default=None, ge=1, le=365)
+
 
 class MedicineOut(BaseModel):
     """Output contract: fields the server returns to the client.
@@ -44,4 +53,9 @@ class MedicineOut(BaseModel):
     mrp: float
     hsn_code: str
     manufacturer: str | None
+
+    # M6.1. Read by compute_pricing so the billing form can pre-fill the
+    # days-supply box, and by the catalogue screen so the hint is visible.
+    default_days_supply: int | None = None
+
     created_at: datetime

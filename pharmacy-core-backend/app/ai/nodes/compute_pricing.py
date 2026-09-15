@@ -97,6 +97,10 @@ def compute_pricing(state: BillingState) -> dict:
                 **item,
                 "unit_price": float(unit_price),
                 "line_total": float(line_total),
+                # M6.1 -- a pre-fill hint for the billing form, not a decision.
+                # `**item` above already carries days_supply through untouched on
+                # the confirm path; this only adds the catalogue's suggestion.
+                "default_days_supply": medicine.default_days_supply,
             })
 
             total_amount += line_total

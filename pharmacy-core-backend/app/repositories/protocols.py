@@ -29,6 +29,7 @@ class MedicineRepository(Protocol):
         mrp: float,
         hsn_code: str,
         manufacturer: str | None,
+        default_days_supply: int | None = None,
     ) -> MedicineOut: ...
 
     def get_by_id(self, medicine_id: int) -> MedicineOut | None: ...

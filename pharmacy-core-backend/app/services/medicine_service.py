@@ -53,6 +53,7 @@ class MedicineService:
             mrp=payload.mrp,
             hsn_code=payload.hsn_code,
             manufacturer=payload.manufacturer,
+            default_days_supply=payload.default_days_supply,
         )
 
     def get_medicine(self, medicine_id: int) -> MedicineOut | None:

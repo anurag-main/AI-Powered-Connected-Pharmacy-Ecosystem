@@ -34,6 +34,7 @@ What happens on failure:
 Sale_id is the new invoice ID — returned to the caller so they can show
 "Invoice #42" to the pharmacist.
 """
+from datetime import datetime
 from decimal import Decimal
 
 from sqlalchemy import select
@@ -63,6 +64,8 @@ def persist_sale(state: BillingState) -> dict:
     extracted = state.get("extracted_intent") or {}
     customer_phone = extracted.get("customer_phone")
     customer_name = extracted.get("customer_name")
+    # M6.1. Absent on the spoken-order path, where nobody was asked the question.
+    whatsapp_opt_in = bool(extracted.get("whatsapp_opt_in"))
 
     with SessionLocal() as db:
         try:
@@ -86,6 +89,19 @@ def persist_sale(state: BillingState) -> dict:
                         # flush() pushes the INSERT to the DB and populates customer.id,
                         # WITHOUT committing. That ID is needed for the sales FK below.
                         db.flush()
+
+                    # M6.1 -- WhatsApp opt-in, recorded in the SAME transaction as
+                    # the sale. If the sale rolls back the consent goes with it,
+                    # which is the correct outcome: consent given for a sale that
+                    # never happened is not consent.
+                    #
+                    # Opting IN is additive and never clears an earlier opt-out
+                    # timestamp. The state is derived by comparing the two, so a
+                    # newer opt_in simply wins and the withdrawal stays on record.
+                    if whatsapp_opt_in:
+                        customer.whatsapp_opt_in_at = datetime.now()
+                        customer.whatsapp_consent_source = "billing_counter"
+
                     customer_id = customer.id
 
                 # ------------------------------------------------------------
@@ -132,6 +148,11 @@ def persist_sale(state: BillingState) -> dict:
                         quantity=item["quantity"],
                         unit_price=Decimal(str(item["unit_price"])),
                         line_total=Decimal(str(item["line_total"])),
+                        # M6.1 -- frozen per line, exactly like unit_price above.
+                        # `.get()` because the quote path never carries it: a
+                        # spoken order has no duration in it, and that absence
+                        # must persist as NULL rather than become a guess.
+                        days_supply=item.get("days_supply"),
                     )
                     db.add(sale_item)
 
