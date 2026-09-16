@@ -28,7 +28,7 @@ the caller decide.
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -150,6 +150,28 @@ class RefillSummary(BaseModel):
     )
 
 
+class NotificationSummary(BaseModel):
+    """The reminder status for one refill opportunity, for the dashboard.
+
+    A PROJECTION of a notification, defined here with primitive fields rather
+    than importing the notification schema. That is the point: the refill domain
+    still has no dependency on the notification domain, and this model would be
+    identical if the reminder had gone out by voice.
+
+    It is populated by the ROUTER, never by ``RefillService`` -- composing two
+    domains is what an API layer is for, and letting the engine do it would be
+    exactly the coupling M6.2 was built to avoid.
+    """
+
+    status: str
+    attempts: int
+    sent_at: datetime | None = None
+    delivered_at: datetime | None = None
+    read_at: datetime | None = None
+    failed_at: datetime | None = None
+    last_error_code: str | None = None
+
+
 class RefillCandidatesResponse(BaseModel):
     """What ``GET /api/v1/refill/candidates`` returns.
 
@@ -165,6 +187,12 @@ class RefillCandidatesResponse(BaseModel):
     lookback_days: int
     summary: RefillSummary
     candidates: list[RefillCandidate]
+
+    # Keyed by source_sale_item_id as a STRING, because JSON object keys are
+    # always strings and a dict[int, ...] would silently become one anyway.
+    # Empty unless the caller asked for it.
+    notifications: dict[str, NotificationSummary] = Field(default_factory=dict)
+
     notes: list[str] = Field(
         default_factory=list,
         description="Plain-language caveats about what this scan could not see.",

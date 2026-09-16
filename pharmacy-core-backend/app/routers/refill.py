@@ -19,7 +19,8 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.schemas.refill import RefillCandidatesResponse
+from app.repositories.notification_repository import NotificationRepository
+from app.schemas.refill import NotificationSummary, RefillCandidatesResponse
 from app.services.refill_service import DEFAULT_LOOKBACK_DAYS, RefillService
 
 router = APIRouter(prefix="/api/v1/refill", tags=["refill"])
@@ -27,6 +28,31 @@ router = APIRouter(prefix="/api/v1/refill", tags=["refill"])
 
 def get_service(db: Session = Depends(get_db)) -> RefillService:
     return RefillService(db)
+
+
+def _attach_notifications(response: RefillCandidatesResponse, db: Session) -> None:
+    """Look up the reminder status for each candidate, in one query.
+
+    Composed HERE rather than inside RefillService. The engine decides who is
+    due; whether a reminder happens to have been sent is a different domain, and
+    an engine that knew about notifications could not be reused by the voice
+    channel later.
+    """
+    sale_item_ids = {c.source_sale_item_id for c in response.candidates}
+    found = NotificationRepository(db).by_source_sale_items(sale_item_ids)
+
+    response.notifications = {
+        str(sale_item_id): NotificationSummary(
+            status=n.status,
+            attempts=n.attempts,
+            sent_at=n.sent_at,
+            delivered_at=n.delivered_at,
+            read_at=n.read_at,
+            failed_at=n.failed_at,
+            last_error_code=n.last_error_code,
+        )
+        for sale_item_id, n in found.items()
+    }
 
 
 @router.get(
@@ -55,13 +81,14 @@ def list_candidates(
     medicine_id: int | None = Query(default=None, ge=1),
     limit: int = Query(default=100, ge=1, le=500),
     service: RefillService = Depends(get_service),
+    db: Session = Depends(get_db),
 ) -> RefillCandidatesResponse:
     """Run the deterministic scan and return the candidates.
 
     The summary counts cover the WHOLE scan, before the filters and the limit, so
     the screen can honestly say "20 of 143 due" rather than counting its own rows.
     """
-    return service.find_candidates(
+    response = service.find_candidates(
         as_of=as_of,
         lookback_days=lookback_days,
         due_only=due_only,
@@ -70,3 +97,5 @@ def list_candidates(
         medicine_id=medicine_id,
         limit=limit,
     )
+    _attach_notifications(response, db)
+    return response
