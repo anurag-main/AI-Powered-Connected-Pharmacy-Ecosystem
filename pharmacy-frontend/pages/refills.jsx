@@ -5,28 +5,34 @@ import { Skeleton } from "@/components/ui/skeleton";
 import Icon from "@/components/ui/icon";
 import RefillTable from "@/components/refill/RefillTable";
 import RefillSummaryCards from "@/components/refill/RefillSummaryCards";
-import { getRefillCandidates, VIEW_OPTIONS } from "@/lib/api/refill";
+import { getRefillCandidates, sendRefillReminder, VIEW_OPTIONS } from "@/lib/api/refill";
 
 /**
- * /refills — who looks due for a refill, and why.
+ * /refills — who looks due for a refill, why, and whether a reminder went out.
  *
- * The purpose of this screen in M6.2 is to visually prove the engine works. It
- * shows the decision and the reasoning; it does not act on either.
+ * M6.2 built the decision; M6.3 added the WhatsApp channel, so this screen now
+ * has a Remind button. What it does NOT have is any knowledge of WhatsApp: it
+ * posts the refill OPPORTUNITY's identity to our own API, and the server
+ * re-derives the candidate and re-checks consent before anything is sent. There
+ * is no path from this app to Meta, and no token ever reaches the browser.
  *
- * There is deliberately NO send button, no message preview and no WhatsApp
- * anything. M6.2's job is to establish that the system can correctly work out
- * WHO should be contacted before a single message is wired up. If this page
- * grows a "Send" control, the refill domain has started to depend on a channel
- * and the future voice agent can no longer reuse any of it.
+ * NO BUSINESS LOGIC HERE. Days overdue, expected dates, the reason sentence and
+ * the reminder status all arrive computed. The button being enabled is a
+ * convenience, never a permission — a hand-crafted click still cannot reach
+ * someone who opted out.
  *
- * NO BUSINESS LOGIC HERE. Days overdue, expected dates and the reason sentence
- * all arrive computed. The page picks a state and renders.
+ * Statuses are never optimistic. A 200 means Meta accepted the message, which is
+ * not the same as the customer receiving it; "delivered" and "read" only ever
+ * come from a webhook.
  */
 
 function RefillsPage() {
     const [view, setView] = useState("due");
     const [data, setData] = useState(null); // null = loading
     const [error, setError] = useState(null);
+    // The row currently being sent, and the outcome of the last attempt.
+    const [sendingId, setSendingId] = useState(null);
+    const [sendResult, setSendResult] = useState(null);
 
     // Guards a slow response from overwriting a newer one, and a setState after
     // unmount. Same pattern as useInventoryRisk.
@@ -61,6 +67,36 @@ function RefillsPage() {
         load(view);
     }, [load, view]);
 
+    /**
+     * Send one reminder, then RE-READ from the server.
+     *
+     * Deliberately not optimistic. A 200 means Meta accepted the message, which
+     * is not the same as the customer receiving it, and "delivered" can only
+     * ever come from a webhook. Showing a hopeful status would have the
+     * dashboard claim something it does not know.
+     */
+    const handleSend = useCallback(
+        async (candidate) => {
+            if (sendingId !== null) return;
+            setSendingId(candidate.source_sale_item_id);
+            setSendResult(null);
+
+            const result = await sendRefillReminder(candidate);
+
+            if (!mountedRef.current) return;
+            setSendingId(null);
+            setSendResult(
+                result.ok
+                    ? { ok: result.data?.sent === true, text: result.data?.reason || "Done." }
+                    : { ok: false, text: result.error },
+            );
+
+            // Re-read so the Reminder column shows what the backend recorded.
+            await load(view);
+        },
+        [load, sendingId, view],
+    );
+
     const candidates = data?.candidates ?? [];
 
     return (
@@ -72,8 +108,8 @@ function RefillsPage() {
                         Refills
                     </h1>
                     <p className="text-sm text-muted-foreground mt-1">
-                        Customers whose medicine should have run out. Nothing is sent from
-                        this screen.
+                        Customers whose medicine should have run out. Reminders are sent
+                        by the server, only to customers who opted in.
                     </p>
                 </div>
 
@@ -98,6 +134,20 @@ function RefillsPage() {
                     </select>
                 </div>
             </div>
+
+            {/* ---- outcome of the last manual send ---- */}
+            {sendResult && (
+                <div
+                    role="status"
+                    className={`rounded-xl border px-4 py-3 text-sm ${
+                        sendResult.ok
+                            ? "bg-emerald-50 text-emerald-800 border-emerald-200"
+                            : "bg-amber-50 text-amber-800 border-amber-200"
+                    }`}
+                >
+                    {sendResult.text}
+                </div>
+            )}
 
             {/* ---- error ---- */}
             {error && (
@@ -146,7 +196,12 @@ function RefillsPage() {
                             </p>
                         </Card>
                     ) : (
-                        <RefillTable candidates={candidates} />
+                        <RefillTable
+                            candidates={candidates}
+                            notifications={data.notifications || {}}
+                            onSend={handleSend}
+                            sendingId={sendingId}
+                        />
                     )}
 
                     {data.notes?.length > 0 && (

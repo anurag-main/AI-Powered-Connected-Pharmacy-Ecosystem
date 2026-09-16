@@ -52,6 +52,7 @@ function makeResponse(overrides = {}) {
             contactable_due: candidates.length,
         },
         notes: ["Anonymous walk-in sales are not included."],
+        notifications: {},
         ...overrides,
         candidates,
     };
@@ -66,15 +67,52 @@ function jsonResponse(body, status = 200) {
     };
 }
 
-function mockRefillApi({ body = makeResponse(), status = 200, networkError = false, hold = null } = {}) {
-    const mock = vi.fn(async (url) => {
+/**
+ * Mocks the two calls the page makes: the candidates GET and the reminder POST.
+ *
+ * `sendResponse` drives the manual send, so a test can assert what the screen
+ * does when the backend refuses ("customer opted out") without any of our own
+ * code being mocked.
+ */
+function mockRefillApi({
+    body = makeResponse(),
+    status = 200,
+    sendResponse = {
+        notification: { status: "sent", attempts: 1 },
+        created: true,
+        sent: true,
+        reason: "Sent.",
+    },
+    sendStatus = 200,
+    bodyAfterSend = null,
+    networkError = false,
+    hold = null,
+} = {}) {
+    let candidatesCalls = 0;
+
+    const mock = vi.fn(async (url, options) => {
         if (networkError) throw new TypeError("Failed to fetch");
-        if (!String(url).includes("/api/v1/refill/candidates")) {
-            throw new Error(`Unexpected request in test: ${url}`);
+        const target = String(url);
+
+        if (
+            options?.method === "POST" &&
+            target.includes("/api/v1/notifications/refill-reminder")
+        ) {
+            return jsonResponse(sendResponse, sendStatus);
         }
-        if (hold) await hold;
-        return jsonResponse(body, status);
+
+        if (target.includes("/api/v1/refill/candidates")) {
+            if (hold) await hold;
+            candidatesCalls += 1;
+            // After a send the page re-reads; a test can hand back a different
+            // body to prove the Reminder column follows the SERVER, not a guess.
+            const payload = bodyAfterSend && candidatesCalls > 1 ? bodyAfterSend : body;
+            return jsonResponse(payload, status);
+        }
+
+        throw new Error(`Unexpected request in test: ${target}`);
     });
+
     vi.stubGlobal("fetch", mock);
     return mock;
 }
@@ -323,14 +361,189 @@ describe("display", () => {
 // ---------------------------------------------------------------------------
 
 describe("architectural boundary", () => {
-    it("offers no way to send anything", async () => {
-        // M6.2 decides WHO. If a Send button appears here, the refill domain has
-        // started depending on a channel and voice can no longer reuse it.
+    it("never names the channel on screen", async () => {
+        // M6.3 added a Remind button, so the M6.2 assertion that no send control
+        // exists is deliberately gone. What must still hold is that the UI does
+        // not know or show WHICH channel carries the reminder — the moment the
+        // screen says "WhatsApp", swapping in voice becomes a UI change too.
         mockRefillApi();
         render(<RefillsPage />);
         await screen.findByTestId("refill-row");
 
-        expect(screen.queryByRole("button", { name: /send|whatsapp|message|remind/i })).toBeNull();
         expect(document.body.textContent.toLowerCase()).not.toContain("whatsapp");
+    });
+
+    it("posts only the opportunity identity, never a message", async () => {
+        // The browser cannot compose a message, name a template or assert
+        // consent. It says "this opportunity"; the server decides everything else.
+        const user = userEvent.setup();
+        const mock = mockRefillApi();
+        render(<RefillsPage />);
+        await screen.findByTestId("refill-row");
+
+        await user.click(screen.getByRole("button", { name: /remind/i }));
+
+        await waitFor(() => {
+            const call = mock.mock.calls.find(([, o]) => o?.method === "POST");
+            const body = JSON.parse(call[1].body);
+            expect(body).toEqual({
+                source_sale_item_id: 100,
+                expected_refill_date: "2026-09-11",
+            });
+        });
+    });
+});
+
+// ---------------------------------------------------------------------------
+// M6.3 — reminder status and manual send
+// ---------------------------------------------------------------------------
+
+describe("reminder status", () => {
+    it("shows an em-dash when no reminder exists yet", async () => {
+        // Nothing has happened, which is different from something failing.
+        mockRefillApi();
+        render(<RefillsPage />);
+
+        const row = await screen.findByTestId("refill-row");
+        expect(within(row).getAllByText("—").length).toBeGreaterThan(0);
+    });
+
+    it("displays the backend's notification status", async () => {
+        mockRefillApi({
+            body: makeResponse({
+                notifications: { 100: { status: "delivered", attempts: 1 } },
+            }),
+        });
+        render(<RefillsPage />);
+
+        const row = await screen.findByTestId("refill-row");
+        expect(within(row).getByText("Delivered")).toBeInTheDocument();
+    });
+
+    it("shows read state when the customer opened the message", async () => {
+        mockRefillApi({
+            body: makeResponse({ notifications: { 100: { status: "read", attempts: 1 } } }),
+        });
+        render(<RefillsPage />);
+
+        const row = await screen.findByTestId("refill-row");
+        expect(within(row).getByText("Read")).toBeInTheDocument();
+    });
+
+    it("shows a failed reminder", async () => {
+        mockRefillApi({
+            body: makeResponse({
+                notifications: {
+                    100: { status: "failed", attempts: 3, last_error_code: "131026" },
+                },
+            }),
+        });
+        render(<RefillsPage />);
+
+        const row = await screen.findByTestId("refill-row");
+        expect(within(row).getByText("Failed")).toBeInTheDocument();
+    });
+});
+
+describe("manual send", () => {
+    it("offers Remind for a contactable customer with no reminder yet", async () => {
+        mockRefillApi();
+        render(<RefillsPage />);
+        await screen.findByTestId("refill-row");
+
+        expect(screen.getByRole("button", { name: /remind/i })).toBeInTheDocument();
+    });
+
+    it("does NOT offer Remind for a customer who opted out", async () => {
+        // The button is a convenience, not the guard — but it should not invite
+        // a click the server is always going to refuse.
+        mockRefillApi({
+            body: makeResponse({
+                candidates: [makeCandidate({ contactability: "opted_out" })],
+            }),
+        });
+        render(<RefillsPage />);
+        await screen.findByTestId("refill-row");
+
+        expect(screen.queryByRole("button", { name: /remind/i })).toBeNull();
+    });
+
+    it("does NOT offer Remind when one was already sent", async () => {
+        mockRefillApi({
+            body: makeResponse({ notifications: { 100: { status: "sent", attempts: 1 } } }),
+        });
+        render(<RefillsPage />);
+        await screen.findByTestId("refill-row");
+
+        expect(screen.queryByRole("button", { name: /remind/i })).toBeNull();
+    });
+
+    it("offers Remind again after a failure", async () => {
+        mockRefillApi({
+            body: makeResponse({ notifications: { 100: { status: "failed", attempts: 1 } } }),
+        });
+        render(<RefillsPage />);
+        await screen.findByTestId("refill-row");
+
+        expect(screen.getByRole("button", { name: /remind/i })).toBeInTheDocument();
+    });
+
+    it("re-reads from the server instead of guessing the new status", async () => {
+        // Never optimistic: a 200 means Meta accepted it, not that the customer
+        // received it. Delivery only ever comes from a webhook.
+        const user = userEvent.setup();
+        mockRefillApi({
+            bodyAfterSend: makeResponse({
+                notifications: { 100: { status: "sent", attempts: 1 } },
+            }),
+        });
+        render(<RefillsPage />);
+        await screen.findByTestId("refill-row");
+
+        await user.click(screen.getByRole("button", { name: /remind/i }));
+
+        expect(await screen.findByText("Sent")).toBeInTheDocument();
+    });
+
+    it("shows the backend's refusal rather than pretending it sent", async () => {
+        const user = userEvent.setup();
+        mockRefillApi({
+            sendResponse: {
+                notification: null,
+                created: false,
+                sent: false,
+                reason: "Customer has opted out of WhatsApp reminders.",
+            },
+        });
+        render(<RefillsPage />);
+        await screen.findByTestId("refill-row");
+
+        await user.click(screen.getByRole("button", { name: /remind/i }));
+
+        expect(await screen.findByRole("status")).toHaveTextContent(/opted out/i);
+    });
+
+    it("reports a failed request without claiming success", async () => {
+        const user = userEvent.setup();
+        mockRefillApi({ sendStatus: 500, sendResponse: { detail: "boom" } });
+        render(<RefillsPage />);
+        await screen.findByTestId("refill-row");
+
+        await user.click(screen.getByRole("button", { name: /remind/i }));
+
+        expect(await screen.findByRole("status")).toBeInTheDocument();
+    });
+
+    it("never exposes a token or a wamid", async () => {
+        mockRefillApi({
+            body: makeResponse({ notifications: { 100: { status: "sent", attempts: 1 } } }),
+        });
+        render(<RefillsPage />);
+        await screen.findByTestId("refill-row");
+
+        const body = document.body.textContent.toLowerCase();
+        for (const secret of ["wamid", "access_token", "bearer", "eaag"]) {
+            expect(body).not.toContain(secret);
+        }
     });
 });

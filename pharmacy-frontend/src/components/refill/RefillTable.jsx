@@ -1,5 +1,9 @@
 import { Card } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import Icon from "@/components/ui/icon";
 import { RefillStatusBadge, ContactabilityBadge } from "./RefillStatusBadge";
+import NotificationStatusBadge from "./NotificationStatusBadge";
+import { CONTACTABILITY, NOTIFICATION_STATUS } from "@/lib/api/refill";
 
 /**
  * The ranked list of refill candidates.
@@ -35,7 +39,23 @@ function OverdueCell({ days }) {
     return <span className="tabular-nums font-medium text-amber-700">{days}d</span>;
 }
 
-export default function RefillTable({ candidates }) {
+/**
+ * Can this candidate be reminded right now?
+ *
+ * PRESENCE and STATE only, never a rule. The button being enabled is a
+ * convenience; the server re-derives the candidate and re-checks consent on
+ * every request, so a stale or hand-crafted click still cannot send to someone
+ * who opted out.
+ */
+function canSend(candidate, notification) {
+    if (candidate.contactability !== CONTACTABILITY.CONTACTABLE) return false;
+    if (!notification) return true;
+    return [NOTIFICATION_STATUS.PENDING, NOTIFICATION_STATUS.FAILED].includes(
+        notification.status,
+    );
+}
+
+export default function RefillTable({ candidates, notifications = {}, onSend, sendingId }) {
     return (
         <Card className="overflow-hidden p-0 gap-0">
             <div className="overflow-x-auto">
@@ -49,7 +69,9 @@ export default function RefillTable({ candidates }) {
                             <th className="text-right font-semibold px-4 py-3">Overdue</th>
                             <th className="text-left font-semibold px-4 py-3">Status</th>
                             <th className="text-left font-semibold px-4 py-3">Contact</th>
+                            <th className="text-left font-semibold px-4 py-3">Reminder</th>
                             <th className="text-left font-semibold px-4 py-3">Why</th>
+                            <th className="px-4 py-3"></th>
                         </tr>
                     </thead>
                     <tbody>
@@ -83,8 +105,28 @@ export default function RefillTable({ candidates }) {
                                 <td className="px-4 py-3">
                                     <ContactabilityBadge contactability={c.contactability} />
                                 </td>
+                                <td className="px-4 py-3">
+                                    <NotificationStatusBadge
+                                        notification={notifications[String(c.source_sale_item_id)]}
+                                    />
+                                </td>
                                 <td className="px-4 py-3 text-xs text-muted-foreground max-w-xs">
                                     {c.reason}
+                                </td>
+                                <td className="px-4 py-3 text-right">
+                                    {canSend(c, notifications[String(c.source_sale_item_id)]) && (
+                                        <Button
+                                            size="sm"
+                                            variant="outline"
+                                            disabled={sendingId === c.source_sale_item_id}
+                                            onClick={() => onSend?.(c)}
+                                        >
+                                            <Icon name="send" size={16} />
+                                            {sendingId === c.source_sale_item_id
+                                                ? "Sending…"
+                                                : "Remind"}
+                                        </Button>
+                                    )}
                                 </td>
                             </tr>
                         ))}

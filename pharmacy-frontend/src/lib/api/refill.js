@@ -5,7 +5,7 @@
  * WHO should be contacted, and the communication layer that acts on that is
  * M6.3. Nothing in this module or on /refills knows what WhatsApp is.
  */
-import { getJSON } from "./client";
+import { getJSON, postJSON } from "./client";
 
 /** Status values the backend can return, mirroring RefillStatus. */
 export const REFILL_STATUS = {
@@ -42,6 +42,40 @@ export function toQuery(view) {
     return { due_only: true, contactable_only: false };
 }
 
+/**
+ * Reminder lifecycle values, mirroring NotificationStatus.
+ *
+ * `pending` and `sending` are transient; the dashboard shows them so a stuck
+ * reminder is visible rather than looking like it was never created.
+ */
+export const NOTIFICATION_STATUS = {
+    PENDING: "pending",
+    SENDING: "sending",
+    SENT: "sent",
+    DELIVERED: "delivered",
+    READ: "read",
+    FAILED: "failed",
+    CANCELLED: "cancelled",
+};
+
+/**
+ * Ask the backend to send the reminder for one refill opportunity.
+ *
+ * Takes the OPPORTUNITY's identity, not a message. The browser cannot assert
+ * that someone is due or that they consented — the server re-derives the
+ * candidate and re-checks consent before anything is sent. There is deliberately
+ * no path from this app to Meta.
+ *
+ * Always resolves; a refusal ("customer opted out") is a business answer the
+ * screen displays, not an error.
+ */
+export function sendRefillReminder(candidate) {
+    return postJSON("/api/v1/notifications/refill-reminder", {
+        source_sale_item_id: candidate.source_sale_item_id,
+        expected_refill_date: candidate.expected_refill_date,
+    });
+}
+
 /** Fetch refill candidates. Always returns a usable shape on success. */
 export async function getRefillCandidates(view = "due") {
     const query = toQuery(view);
@@ -63,6 +97,13 @@ export async function getRefillCandidates(view = "due") {
             ...data,
             candidates: Array.isArray(data.candidates) ? data.candidates : [],
             notes: Array.isArray(data.notes) ? data.notes : [],
+            // Keyed by source_sale_item_id (as a string — JSON object keys
+            // always are). The table looks each row up rather than the frontend
+            // joining two lists itself.
+            notifications:
+                data.notifications && typeof data.notifications === "object"
+                    ? data.notifications
+                    : {},
         },
     };
 }
