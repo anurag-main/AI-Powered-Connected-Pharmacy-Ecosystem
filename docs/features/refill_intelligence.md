@@ -2,11 +2,14 @@
 
 > Last verified against the source, real MySQL and the full test suite: **2026-09-15**.
 >
-> This document covers **M6.1** (capturing the facts) and **M6.2** (the engine
-> that interprets them). Jump to [M6.2](#m62--the-refill-intelligence--eligibility-engine).
+> This document covers **M6.1** (capturing the facts), **M6.2** (the engine that
+> interprets them) and **M6.3** (the WhatsApp channel that acts on them).
+> Jump to [M6.2](#m62--the-refill-intelligence--eligibility-engine) or
+> [M6.3](#m63--whatsapp-refill-reminders).
 >
-> Neither milestone sends anything. There is no scheduler, no WhatsApp
-> integration and no agent in the codebase.
+> M6.1 and M6.2 send nothing. M6.3 adds sending, and it is **off by default** —
+> `WHATSAPP_ENABLED=false` selects an in-memory fake provider. There is still no
+> agent, no LLM and no voice anywhere in this feature.
 
 ---
 
@@ -703,3 +706,232 @@ M6.3 adds: `notifications` + `notification_attempts`, the WhatsApp Cloud API
 adapter, approved templates, webhooks for delivery status, quiet hours, and the
 sweep that turns a candidate into a queued message. **None of it should require
 changing this engine.** If it does, the boundary was drawn in the wrong place.
+
+---
+---
+
+# M6.3 — WhatsApp Refill Reminders
+
+> Verified against the source, real MySQL and a real signed webhook: **2026-09-16**.
+>
+> Integration detail (Meta setup, templates, error codes, going live) lives in
+> [`docs/integrations/whatsapp.md`](../integrations/whatsapp.md). This section
+> covers how it plugs into the refill domain.
+>
+> **Not verified against Meta itself** — see §M6.3 §9.
+
+## M6.3 §1 What it adds
+
+M6.2 could say *who should be contacted*. M6.3 contacts them:
+
+```
+RefillCandidate -> NotificationService -> MessagingProvider -> Meta -> customer
+                                                                        |
+                        MySQL <- WebhookService <- webhook <------------+
+```
+
+Sending is **off by default** (`WHATSAPP_ENABLED=false`), which selects an
+in-memory fake provider. The whole pipeline runs, records state and is fully
+testable without a token or a network.
+
+## M6.3 §2 The boundary, still intact
+
+`RefillService`, `RefillRepository` and `app/schemas/refill.py` contain **no
+import of httpx, no Meta URL, no token, no template name**. Verified by grep and
+by a test that fails if a template or message body ever appears in the refill API
+response.
+
+The one place the two domains meet is `app/routers/refill.py`, which attaches a
+`NotificationSummary` projection to the candidates response. That is deliberate:
+**composing two domains is what an API layer is for**, and doing it in the engine
+would be exactly the coupling M6.2 was built to avoid. `NotificationSummary` is
+defined with primitive fields rather than importing the notification schema, and
+would be identical if the reminder had gone out by voice.
+
+## M6.3 §3 Domain model
+
+Two tables, not three.
+
+| Table | Purpose |
+|---|---|
+| `notifications` | One logical reminder. The thing that must never duplicate. |
+| `notification_events` | One row per provider callback. The audit trail. |
+
+A separate `notification_attempts` table was rejected: attempts are only
+interesting as "how many times, and what went wrong last time", which is two
+columns on the parent, and a third table would need joining on every dashboard
+query to answer what the parent already knows. Webhook events **do** need their
+own table — they arrive out of order, they arrive more than once, and they must
+be deduplicated against an id we do not control.
+
+Migration `e2d5b7c41a80` (down_revision `c7a1e4b90f21`), applied to live MySQL.
+
+## M6.3 §4 Idempotency — enforced by the database
+
+| Concern | Guarantee |
+|---|---|
+| Duplicate reminder | `UNIQUE(notifications.idempotency_key)` |
+| Duplicate webhook | `UNIQUE(notification_events.provider_event_id, status)` |
+
+`refill:{sale_item_id}:{date}:whatsapp` — the M6.2 key plus the channel. Keyed on
+the sale **item** so correcting a `days_supply` produces a genuinely different
+opportunity rather than reusing the old one's "already sent" record.
+
+The webhook key is the **pair**: one message emits `sent`, `delivered` and `read`
+all carrying the same wamid, so deduplicating on the wamid alone would discard
+delivery and read and freeze every message at "sent".
+
+**Proven on real MySQL:** three consecutive sweeps produced `sent=1, sent=0,
+sent=0` and exactly one row; five webhook posts produced four events.
+
+## M6.3 §5 Consent fails closed
+
+Checked in **our** code before a request is constructed:
+
+```
+contactability != CONTACTABLE
+    -> no notification row
+    -> no HTTP request
+    -> reason returned to the screen
+```
+
+WhatsApp has its own opt-in rules, but relying on them would make the pharmacy's
+DPDP obligation depend on a third party's API, and a missing check would surface
+only as a complaint. `assess_contactability()` is M6.2's, unchanged — consent
+logic is not duplicated.
+
+## M6.3 §6 Eligibility recheck
+
+A queued job or a pharmacist's click can be hours stale, and the customer may
+have walked into the shop since. `send_reminder_for()` therefore takes the
+**opportunity's identity**, not a prepared message, and re-derives the candidate
+from the database before anything is sent. A stale trigger cannot produce a wrong
+message.
+
+## M6.3 §7 Scheduler — a script, not Celery
+
+`scripts/refill_sweep.py`, run by cron or Windows Task Scheduler.
+
+The requirement is "run this once a day". That is a cron problem. Celery buys
+retries, concurrency and a broker; retries are already handled by the attempt
+counter on each row, and adding Redis plus a worker to a single-server pharmacy
+deployment is infrastructure nobody is going to operate. APScheduler was the
+other candidate — it runs in-process, so the sweep only happens while the API is
+up and would fire once per worker if the API were ever scaled out.
+
+It calls `NotificationService` **directly**. An application making HTTP requests
+to itself adds a network hop, a second set of failure modes and an authentication
+problem to reach code it can already import.
+
+## M6.3 §8 Code-level round trip
+
+```
+scripts/refill_sweep.py  main()
+ -> app/services/notification_service.py  run_sweep()
+     -> app/services/refill_service.py    find_candidates(due_only, contactable_only)
+     -> send_for_candidate()
+          consent gate  (Contactability)
+          app/repositories/notification_repository.py  find_by_key()
+          _create()  -> UNIQUE(idempotency_key)  -> MySQL
+          _attempt_send()
+           -> app/integrations/messaging/factory.py  get_messaging_provider()
+           -> app/integrations/messaging/whatsapp.py  send_template()
+                POST {base}/{version}/{phone_number_id}/messages
+           -> Meta Cloud API -> customer's WhatsApp
+
+Meta -> POST /api/v1/webhooks/whatsapp
+ -> app/routers/whatsapp_webhook.py  receive()
+      raw body -> signature_is_valid()  (403 if not)
+ -> app/services/whatsapp_webhook_service.py  process()
+      _apply_status() -> dedupe (wamid, status)
+                      -> find_by_provider_message_id()
+                      -> add_event() + _advance()
+ -> MySQL  notifications / notification_events
+
+Dashboard:
+ pharmacy-frontend/pages/refills.jsx
+  -> src/lib/api/refill.js  getRefillCandidates() / sendRefillReminder()
+  -> GET /api/v1/refill/candidates
+       app/routers/refill.py  _attach_notifications()  <- NotificationRepository
+  -> src/components/refill/RefillTable.jsx
+     src/components/refill/NotificationStatusBadge.jsx
+```
+
+## M6.3 §9 What was and was NOT verified against Meta
+
+**Verified, against real MySQL and a real HTTP server:**
+
+| Step | Result |
+|---|---|
+| `GET` webhook handshake, correct token | `200`, echoed `1158201444` as plain text |
+| `GET` handshake, wrong token | `403` |
+| `POST` webhook, unsigned | `403` |
+| `POST` webhook, valid HMAC | `200`, `applied=1` |
+| duplicate `delivered` | `200`, `duplicates=1`, still one event row |
+| `read` after `delivered` | status advanced to `read` |
+| late `sent` after `read` | status stayed `read` |
+| `failed` after `delivered` | `failed_at` stayed NULL — delivery preserved |
+| 5 webhooks posted | **4 event rows** |
+| sweep run 3× | 1 notification, 1 attempt, `sent=1,0,0` |
+| `/refills` in headless Chrome | shows the **Read** badge, no "whatsapp" text, no wamid or token in the DOM |
+
+**NOT verified — no real message has ever been sent.** This needs a Meta app, a
+WhatsApp Business Account, an access token, a phone number ID, an approved
+template, a verified test recipient and a public HTTPS tunnel. None of those
+exist in this repo, and none can be created from here. The checklist is in
+[`whatsapp.md` §12](../integrations/whatsapp.md).
+
+What that leaves genuinely unproven: **only whether Meta accepts our exact
+request shape and returns the errors we mapped.** Everything downstream of the
+HTTP call is proven, because the webhook test used real signed payloads in Meta's
+documented format.
+
+## M6.3 §10 Observability
+
+`notification_created`, `notification_eligibility_checked`,
+`notification_send_started`, `notification_send_accepted`,
+`notification_send_failed`, `notification_provider_alert`,
+`notification_sweep_completed`, `whatsapp_webhook_received`,
+`whatsapp_webhook_processed`, `whatsapp_message_delivered`,
+`whatsapp_message_read`, `whatsapp_message_failed`,
+`whatsapp_message_failed_after_delivery`, `whatsapp_webhook_bad_signature`.
+
+All correlate through the existing `request_id` / `run_id` context, plus
+`notification_id`. **Never logged:** access tokens, message bodies, customer
+phone numbers, or an inbound reply's text.
+
+`notification_provider_alert` is deliberately a separate ERROR event: an expired
+token stops every message for every customer, which is a different class of
+problem from one unreachable number.
+
+## M6.3 §11 Known limitations
+
+1. **Never tested against Meta** (§9). The single biggest gap.
+2. **No authentication** on `POST /notifications/refill-reminder`. The webhook is
+   signature-protected; this is not.
+3. **No quiet hours.** The sweep sends whenever it runs. Cron timing is the only
+   control, and a manual click has none at all.
+4. **No per-customer frequency cap.** Three medicines due on one day produce
+   three messages — the flat candidate list makes grouping possible, but the
+   grouping is not built.
+5. **No `CANCELLED` path in the UI.** The status exists and the state machine
+   honours it; nothing sets it.
+6. **Replies are acknowledged, not read.** An inbound message returns 200 and is
+   counted. There is no reply agent, by design.
+7. **Retries wait for the next sweep**, so a transient failure delays a reminder
+   by a day rather than minutes.
+8. **English template only.** Marathi/Hindi templates need separate Meta
+   approval.
+
+## M6.3 §12 M6.4 readiness
+
+The reply path is the natural next milestone, and the foundation is there: signed
+webhooks are verified, inbound messages already arrive and are counted, and
+`notification_events` can hold them. What M6.4 adds is understanding — intent
+classification over free-form Marathi and Hindi, which is the first place in this
+entire feature where an LLM is genuinely the right tool, because the input really
+is unstructured natural language.
+
+Before that, two smaller items: **authentication** (§11.2) and **quiet hours plus
+per-customer grouping** (§11.3, §11.4), both of which protect the phone number's
+quality rating — and a throttled number degrades delivery for every customer.

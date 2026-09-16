@@ -1666,3 +1666,114 @@ The project has agents. That is not a reason for this to be one.
 3. Letting the domain know its delivery channel. The instant `RefillCandidate`
    grows a `whatsapp_template` field, the voice agent can no longer reuse it —
    and nothing will fail loudly to tell you.
+
+---
+
+## M6.3 — sending the reminder
+
+### The analogy
+
+You want the shop to text people. Three things can go wrong that have nothing to
+do with writing the text:
+
+1. You text the same person twice because you checked your list twice.
+2. The phone company tells you "delivered" and later "failed" about the *same*
+   message, because it reached their phone but not their laptop.
+3. The phone company tells you the same thing three times.
+
+Almost all of M6.3 is those three problems. The actual sending is one HTTP POST.
+
+### Let the database do the hard part
+
+Two UNIQUE constraints carry the whole idempotency story:
+
+```
+UNIQUE(notifications.idempotency_key)                  -> one reminder
+UNIQUE(notification_events.provider_event_id, status)  -> one webhook applied
+```
+
+**Lesson:** an "already sent?" check in Python is a *fast path*, not a guarantee.
+Two workers can both pass it in the same millisecond. A UNIQUE index cannot be
+raced. So the code checks first (for a clean answer), and catches IntegrityError
+second (for correctness) — and the loser reads the winner's row instead of
+failing, which is the difference between a duplicate message and no message.
+
+**The webhook key had to be the PAIR.** My first instinct was to deduplicate on
+the wamid alone. That is wrong: one message emits `sent`, then `delivered`, then
+`read`, all with the *same* wamid. Deduplicating on it would have thrown away
+delivery and read, and every message would have frozen at "sent".
+
+### Status ranking beats status ordering
+
+Webhooks arrive out of order. I gave each status a rank and only ever move up:
+
+```
+sent 2  ->  delivered 3  ->  read 4
+```
+
+A late `sent` landing after `read` is ignored instead of dragging the message
+backwards.
+
+And the nastiest real case, which I only found by reading Meta's docs properly:
+**one message can emit both `delivered` and `failed`** (delivered on the phone,
+failed on a linked desktop). If `failed` wins, the pharmacist chases a reminder
+that actually arrived. So `failed` after `delivered` is deliberately dropped.
+
+### Retry only what can succeed
+
+Not every error deserves a retry. `131026` means the number is not on WhatsApp —
+retrying can *never* work, and it burns quota while damaging the number's quality
+rating, which throttles delivery **to every other customer**. One bad number can
+degrade the whole shop's messaging.
+
+```
+timeout / 5xx / 429   -> retry
+131026 / bad template -> never
+expired token         -> never, and wake someone up
+unknown 4xx           -> treat as permanent
+```
+
+That last one is a judgement call worth remembering: **retrying an error you do
+not understand is how a bug becomes thousands of failed sends.**
+
+And the retry is not a `sleep()` inside the request — holding a web worker open
+for a backoff is how one slow provider takes down the whole API. The row goes
+back to PENDING and the next sweep picks it up.
+
+### Fail closed on consent
+
+Consent is checked in *our* code before a request is even built. WhatsApp has its
+own opt-in rules, but if we leaned on them, the pharmacy's legal obligation would
+be enforced by someone else's API, and a missing check would surface as a
+complaint rather than a test failure.
+
+### The fake provider is not a mock
+
+`FakeMessagingProvider` implements the real interface and records what it was
+asked to send. The entire pipeline — consent, persistence, state machine,
+idempotency — runs exactly as in production, right up to the wire. That is
+different from mocking our own `sendReminder()` function, which would have tested
+nothing.
+
+It is also what runs when `WHATSAPP_ENABLED=false`, so cloning the repo and
+running the sweep cannot message a real person.
+
+### Two bugs my own tests caught
+
+1. `{"entry": "not-a-list"}` iterated the **string**, character by character, and
+   raised on `"o".get(...)`. That becomes a 500, which makes Meta redeliver the
+   entire batch forever — including events that had already processed. Every
+   level is type-checked now, not just presence-checked.
+
+2. My verification script reported the webhook had done nothing, while the server
+   log said `applied=1`. The server was right: MySQL's REPEATABLE READ had pinned
+   my reader session to a snapshot taken before the webhook. **Lesson:** when a
+   read disagrees with a log, suspect your transaction isolation before you
+   suspect the code.
+
+### 3 beginner mistakes
+1. Building idempotency in application code when a UNIQUE constraint does it
+   better and cannot be raced.
+2. Assuming webhook events arrive once, and in order. They do neither.
+3. Putting the medicine name in the message. It shows on a lock screen — "your
+   Metformin is due" tells anyone holding the phone that its owner is diabetic.

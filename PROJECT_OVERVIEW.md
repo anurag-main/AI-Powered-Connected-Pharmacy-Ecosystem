@@ -487,6 +487,9 @@ Base: `http://localhost:8000` · Docs: `/docs` · Health: `GET /health`
 | POST | `/api/v1/customers/{id}/whatsapp/opt-in` | Record consent **now** (no client timestamp — no back-dating) |
 | POST | `/api/v1/customers/{id}/whatsapp/opt-out` | Withdraw consent, optional reason |
 | GET | `/api/v1/refill/candidates` | **M6.2** — who is due for a refill, with the reason. Deterministic, derived from sales, contacts nobody |
+| POST | `/api/v1/notifications/refill-reminder` | **M6.3** — send (or reuse) the WhatsApp reminder for one opportunity. Consent-gated, idempotent |
+| GET | `/api/v1/notifications` | Recent reminders and their delivery status |
+| GET/POST | `/api/v1/webhooks/whatsapp` | Meta subscription handshake and message-status callbacks (HMAC verified) |
 | GET | `/api/v1/reorder/suggestions` | Run the reorder agent, return proposals |
 | POST | `/api/v1/reorder/approve` | Idempotently approve a proposal → `reorder_requests` |
 | POST | `/api/v1/business/analyze` | Ask the BI agent a business question |

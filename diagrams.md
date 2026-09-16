@@ -2123,3 +2123,132 @@ graph LR
 
 No table was added. Candidates are derived, so a scan writes nothing and running
 it twice is free — idempotency by construction rather than by careful code.
+
+---
+
+## M6.3 — WhatsApp refill reminders
+
+### Complete system
+
+```mermaid
+graph TD
+    DASH["Pharmacy dashboard<br/>/refills"] --> API["FastAPI"]
+    CRON["cron / Task Scheduler<br/>scripts/refill_sweep.py"] --> NS
+
+    API --> RD["Refill Domain<br/>RefillService"]:::domain
+    RD --> RO["RefillCandidate<br/>decision only"]:::domain
+    RO --> NS["NotificationService<br/>consent gate + idempotency"]:::notif
+    API --> NS
+
+    NS --> MP["MessagingProvider<br/>(interface)"]:::iface
+    MP --> WP["WhatsAppProvider"]:::meta
+    MP -.-> VP["VoiceProvider · M7"]:::future
+    WP --> META["Meta Cloud API"]:::meta
+    META --> CUST["Customer WhatsApp"]
+
+    CUST --> META
+    META --> WH["POST /webhooks/whatsapp<br/>HMAC verified"]:::meta
+    WH --> WS["WhatsAppWebhookService"]:::notif
+    WS --> DB[("MySQL<br/>notifications<br/>notification_events")]
+    NS --> DB
+    DB --> API
+
+    classDef domain fill:#e0e7ff,stroke:#44c,stroke-width:3px,color:#000
+    classDef notif fill:#d6ffd9,stroke:#0a0,stroke-width:3px,color:#000
+    classDef iface fill:#fff4cc,stroke:#c90,stroke-width:3px,color:#000
+    classDef meta fill:#ffe0e0,stroke:#c44,stroke-width:2px,color:#000
+    classDef future fill:#f0f0f0,stroke:#888,stroke-dasharray:4,color:#000
+```
+
+The refill domain (blue) never touches the red boxes. Voice plugs in at the
+yellow interface without the decision layer changing.
+
+### Outbound send
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant C as cron
+    participant N as NotificationService
+    participant R as RefillService
+    participant D as MySQL
+    participant P as WhatsAppProvider
+    participant M as Meta
+
+    C->>N: run_sweep()
+    N->>R: find_candidates(due, contactable)
+    R->>D: derive from sales
+    R-->>N: candidates
+
+    loop each candidate
+        N->>N: consent gate
+        Note over N: not contactable -> STOP.<br/>No row, no HTTP request.
+        N->>D: find_by_key(idempotency_key)
+        Note over N,D: already sent -> STOP
+        N->>D: INSERT (UNIQUE key)
+        N->>D: status = SENDING, attempts += 1
+        N->>P: send_template()
+        P->>M: POST /{phone_id}/messages
+        alt accepted
+            M-->>P: 200 {messages:[{id: wamid}]}
+            P-->>N: ACCEPTED
+            N->>D: status = SENT, store wamid
+        else retryable (429, 5xx, timeout)
+            P-->>N: RETRYABLE
+            N->>D: status = PENDING
+            Note over N: next sweep retries.<br/>No sleep inside the request.
+        else permanent (131026, bad template, auth)
+            P-->>N: PERMANENT
+            N->>D: status = FAILED
+        end
+    end
+```
+
+### Webhook
+
+```mermaid
+graph TD
+    M["Meta"] --> W["POST /api/v1/webhooks/whatsapp"]
+    W --> SIG{"X-Hub-Signature-256<br/>valid?"}
+    SIG -->|"no"| F403["403 — not Meta"]:::bad
+    SIG -->|"yes"| P["WhatsAppWebhookService.process()"]
+
+    P --> DUP{"event (wamid, status)<br/>already stored?"}
+    DUP -->|"yes"| SKIP["200, counted as duplicate"]:::ok
+    DUP -->|"no"| MATCH{"notification with<br/>this wamid?"}
+    MATCH -->|"no"| ACK["200 — not our message"]:::ok
+    MATCH -->|"yes"| ADV["record event + advance status"]
+    ADV --> DB[("MySQL")]
+
+    classDef bad fill:#ffd6d6,stroke:#c00,stroke-width:3px,color:#000
+    classDef ok fill:#d6ffd9,stroke:#0a0,stroke-width:2px,color:#000
+```
+
+A signed request **always** returns 200. Meta retries any non-2xx by redelivering
+the whole batch, so one unparseable event would replay every event forever.
+
+### Lifecycle, and the two traps
+
+```mermaid
+stateDiagram-v2
+    [*] --> pending: created
+    pending --> sending: attempt
+    sending --> sent: Meta accepted (wamid)
+    sending --> pending: retryable
+    sending --> failed: permanent / attempts exhausted
+    sent --> delivered: webhook
+    delivered --> read: webhook
+    sent --> failed: webhook
+    pending --> cancelled: no longer wanted
+
+    note right of read
+        RANK, not order.
+        A late `sent` after `read`
+        must not move it backwards.
+    end note
+    note right of delivered
+        `failed` AFTER `delivered`
+        is IGNORED — multi-device.
+        The customer did get it.
+    end note
+```
