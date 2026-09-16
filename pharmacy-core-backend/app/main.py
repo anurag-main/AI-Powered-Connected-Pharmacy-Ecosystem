@@ -17,7 +17,9 @@ from app.routers import expiry as expiry_router
 from app.routers import inventory as inventory_router
 from app.routers import medicines as medicines_router
 from app.routers import purchases as purchases_router
+from app.routers import notifications as notifications_router
 from app.routers import refill as refill_router
+from app.routers import whatsapp_webhook as whatsapp_webhook_router
 from app.routers import reorder as reorder_router
 from app.routers import sales as sales_router
 from app.routers import tool_agent as tool_agent_router
@@ -90,6 +92,8 @@ def health_check():
 app.include_router(medicines_router.router)
 app.include_router(customers_router.router)
 app.include_router(refill_router.router)
+app.include_router(notifications_router.router)
+app.include_router(whatsapp_webhook_router.router)
 app.include_router(purchases_router.router)
 app.include_router(billing_router.router)
 app.include_router(reorder_router.router)
